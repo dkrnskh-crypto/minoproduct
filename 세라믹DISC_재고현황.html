@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>세라믹 DISC 재고현황</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-app-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+/* 레이아웃: 상단 고정 필터바 + KPI + 현황 그리드 + 하단 입·출고 상세 2분할. 엔터프라이즈 MES 톤, 틸/슬레이트 */
+:root{
+  --bg:#eef1f4; --surface:#ffffff; --surface-2:#f6f8fa; --ink:#1b2430; --ink-2:#5b6775;
+  --line:#d7dee6; --line-2:#e6ecf2;
+  --brand:#0f766e; --brand-2:#0b5c55; --head:#1f2a37; --head-ink:#e8edf2;
+  --in:#0f766e; --in-bg:#e4f3f0; --out:#b4451f; --out-bg:#fbe9e1;
+  --warn:#b45309; --accent-row:#e9f4f2;
+  --mono:"SFMono-Regular",ui-monospace,"Consolas","Menlo",monospace;
+  --sans:"Inter","Pretendard","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e1319; --surface:#161d26; --surface-2:#1b232e; --ink:#e6ecf2; --ink-2:#98a6b5;
+  --line:#2a3542; --line-2:#222c38;
+  --brand:#2dd4bf; --brand-2:#14b8a6; --head:#0b1119; --head-ink:#dfe8f0;
+  --in:#2dd4bf; --in-bg:#113631; --out:#f08a5d; --out-bg:#3a2017;
+  --warn:#f0b357; --accent-row:#15302c; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0e1319; --surface:#161d26; --surface-2:#1b232e; --ink:#e6ecf2; --ink-2:#98a6b5;
+  --line:#2a3542; --line-2:#222c38;
+  --brand:#2dd4bf; --brand-2:#14b8a6; --head:#0b1119; --head-ink:#dfe8f0;
+  --in:#2dd4bf; --in-bg:#113631; --out:#f08a5d; --out-bg:#3a2017;
+  --warn:#f0b357; --accent-row:#15302c; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.45}
+.wrap{padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px));padding-block:0 32px;max-width:1400px;margin:0 auto}
+h1,h2,h3{margin:0}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* header */
+.appbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--head);color:var(--head-ink);
+  margin-left:calc(-1*max(14px,env(safe-area-inset-left,0px)));margin-right:calc(-1*max(14px,env(safe-area-inset-right,0px)));
+  padding:10px max(14px,env(safe-area-inset-left,0px));display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:3px solid var(--brand)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:21;background:var(--head)}
+.logo{font-weight:800;letter-spacing:.5px;font-size:15px;color:#fff;background:var(--brand);padding:3px 9px;border-radius:5px}
+.appbar h1{font-size:15px;font-weight:700}
+.appbar .sub{color:#9fb0c0;font-size:11.5px;margin-left:2px}
+.spacer{flex:1}
+.theme-btn{background:transparent;border:1px solid #3a4858;color:var(--head-ink);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
+.syncbadge{font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap}
+.syncbadge.on{background:rgba(45,212,191,.16);color:#2dd4bf}
+.syncbadge.off{background:rgba(148,163,184,.18);color:#9fb0c0}
+
+/* filter bar */
+.filters{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-top:14px;
+  display:flex;gap:16px 20px;flex-wrap:wrap;align-items:flex-end}
+.fgrp{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fgrp label{font-size:11px;color:var(--ink-2);font-weight:600;letter-spacing:.2px}
+.fgrp .row{display:flex;gap:6px;align-items:center}
+select,input[type=date]{font-family:var(--sans);font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+input[type=date]{min-width:140px}
+.quick{display:flex;gap:4px;flex-wrap:wrap}
+.quick button{font-size:11.5px;padding:5px 9px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-2);border-radius:14px;cursor:pointer}
+.quick button:hover{border-color:var(--brand);color:var(--brand)}
+.btn{font-family:var(--sans);font-size:13px;font-weight:700;padding:8px 16px;border-radius:7px;border:1px solid var(--brand);background:var(--brand);color:#fff;cursor:pointer}
+.btn:hover{background:var(--brand-2)}
+.btn.ghost{background:var(--surface);color:var(--brand)}
+.btn.ghost:hover{background:var(--accent-row)}
+.filehint{font-size:11px;color:var(--ink-2)}
+
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:11px 13px;display:flex;flex-direction:column;gap:3px}
+.kpi .k-label{font-size:11px;color:var(--ink-2);font-weight:600}
+.kpi .k-val{font-size:22px;font-weight:800;letter-spacing:-.5px}
+.kpi .k-unit{font-size:11px;color:var(--ink-2);font-weight:500}
+.kpi.in .k-val{color:var(--in)} .kpi.out .k-val{color:var(--out)}
+
+/* section title */
+.sec{margin-top:18px;display:flex;align-items:center;gap:8px}
+.sec h2{font-size:14px;font-weight:700}
+.sec .tag{font-size:11px;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--line);padding:2px 8px;border-radius:12px}
+
+/* grid table */
+.tablewrap{margin-top:8px;overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table.grid{border-collapse:collapse;width:100%;min-width:900px;font-size:12.5px}
+table.grid th,table.grid td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line-2);white-space:nowrap}
+table.grid thead th{background:var(--surface-2);color:var(--ink-2);font-weight:700;border-bottom:1px solid var(--line);position:sticky;top:0}
+table.grid thead tr.g1 th{text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:.4px;border-left:1px solid var(--line)}
+table.grid th.l,table.grid td.l{text-align:left}
+table.grid td.prod{font-weight:700;color:var(--ink)}
+table.grid td.pn{color:var(--ink-2);font-family:var(--mono);font-size:11.5px}
+table.grid tbody tr{cursor:pointer}
+table.grid tbody tr:hover{background:var(--accent-row)}
+table.grid tbody tr.sel{background:var(--accent-row);box-shadow:inset 3px 0 0 var(--brand)}
+.col-in{color:var(--in);font-weight:700}
+.col-out{color:var(--out);font-weight:700}
+.neg{color:#dc2626;font-weight:700}
+.muted{color:var(--ink-2)}
+.sep{border-left:1px solid var(--line)}
+table.grid tfoot td{background:var(--head);color:var(--head-ink);font-weight:800;border-bottom:none}
+.rate{display:inline-block;min-width:40px}
+.bar{height:5px;border-radius:3px;background:var(--line-2);overflow:hidden;margin-top:3px}
+.bar>i{display:block;height:100%;background:var(--brand)}
+
+/* detail panels */
+.details{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.panel>.phead{padding:9px 12px;font-weight:700;font-size:12.5px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line)}
+.panel.in>.phead{background:var(--in-bg);color:var(--in)}
+.panel.out>.phead{background:var(--out-bg);color:var(--out)}
+.phead .dot{width:8px;height:8px;border-radius:50%}
+.panel.in .dot{background:var(--in)} .panel.out .dot{background:var(--out)}
+.phead .cnt{margin-left:auto;font-weight:600;font-size:11px;color:var(--ink-2)}
+.plist{max-height:320px;overflow:auto}
+table.mini{border-collapse:collapse;width:100%;font-size:12px}
+table.mini th,table.mini td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--line-2);white-space:nowrap}
+table.mini th{background:var(--surface-2);color:var(--ink-2);font-weight:600;position:sticky;top:0;z-index:1}
+table.mini td.l,table.mini th.l{text-align:left}
+table.mini tr:hover td{background:var(--accent-row)}
+table.mini .date{font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+.panel tfoot td{font-weight:800;background:var(--surface-2);border-top:1px solid var(--line)}
+.empty{padding:26px 12px;text-align:center;color:var(--ink-2);font-size:12px}
+
+/* notes */
+.notes{margin-top:16px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:11.5px;color:var(--ink-2);line-height:1.7}
+.notes b{color:var(--ink)}
+.notes code{font-family:var(--mono);background:var(--surface);padding:1px 5px;border-radius:4px;border:1px solid var(--line);color:var(--ink)}
+.notes .warn{color:var(--warn);font-weight:700}
+
+/* tabs */
+.tabs{display:flex;gap:2px;margin-top:14px;border-bottom:2px solid var(--line)}
+.tab{font-family:var(--sans);font-size:13.5px;font-weight:700;padding:10px 20px;border:none;background:transparent;color:var(--ink-2);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px}
+.tab.active{color:var(--brand);border-bottom-color:var(--brand)}
+.tab:hover{color:var(--ink)}
+
+/* input tab */
+.io-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
+.btn.danger{border-color:#c2410c;color:#c2410c;background:var(--surface)}
+.btn.danger:hover{background:var(--out-bg)}
+.io-sub{margin-top:7px;font-size:11.5px;color:var(--ink-2)}
+#ioHint{color:var(--brand);font-weight:700}
+.seg{display:flex;flex-wrap:wrap;margin-top:16px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{font-family:var(--sans);font-size:13px;font-weight:600;padding:9px 20px;border:none;background:transparent;color:var(--ink-2);cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:none}
+.seg button.active{background:var(--brand);color:#fff}
+.entry{margin-top:14px}
+.eform{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.eform .ef{display:flex;flex-direction:column;gap:4px}
+.eform .ef label{font-size:11px;color:var(--ink-2);font-weight:600}
+.eform input[type=number]{width:94px;font-family:var(--sans);font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);text-align:right}
+.eform input[type=date],.eform select{font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.eform .btn{padding:8px 18px}
+button.del{background:transparent;border:1px solid var(--line);color:var(--out);border-radius:5px;padding:2px 9px;cursor:pointer;font-size:12px;line-height:1.4}
+button.del:hover{background:var(--out-bg)}
+input.edit{width:120px;text-align:right;font-family:var(--sans);font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+input.edit:focus{outline:2px solid var(--brand);border-color:var(--brand)}
+#tab-input table.grid tbody tr{cursor:default}
+#tab-input table.grid td{text-align:right}
+#tab-input table.grid td.l{text-align:left}
+#tab-input table.grid th:last-child,#tab-input table.grid td:last-child{text-align:center}
+/* 엑셀형 입력 시트 */
+.gridtools{display:flex;align-items:center;gap:10px;margin-top:14px}
+.formtitle{font-size:14px;font-weight:700;margin:0}
+#addRow{padding:8px 16px}
+.sheetwrap{margin-top:10px;overflow:auto;max-height:72vh;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table.sheet{border-collapse:separate;border-spacing:0;font-size:12px}
+table.sheet th,table.sheet td{border-right:1px solid var(--line-2);border-bottom:1px solid var(--line-2);padding:0;white-space:nowrap}
+table.sheet thead th{background:var(--surface-2);color:var(--ink-2);font-weight:700;text-align:center;padding:5px 6px;position:sticky;z-index:3}
+table.sheet thead tr.g1 th{top:0}
+table.sheet thead tr.g2 th{top:28px}
+table.sheet thead th.gh{background:var(--accent-row);color:var(--brand)}
+table.sheet thead th.autoh{background:var(--in-bg);color:var(--brand-2)}
+table.sheet .rownum{position:sticky;left:0;z-index:2;background:var(--surface-2);color:var(--ink-2);text-align:center;font-size:11px;padding:0 7px;border-right:1px solid var(--line);min-width:34px}
+table.sheet thead .rownum{z-index:5}
+table.sheet tr.sum td{background:var(--surface-2);font-weight:800;text-align:right;padding:5px 7px;color:var(--ink);position:sticky;top:56px;z-index:2}
+table.sheet tr.sum td.rownum{z-index:4;top:56px}
+table.sheet tr.sum td.lbl{text-align:center;color:var(--brand)}
+table.sheet input,table.sheet .cst{border:none;background:transparent;font-family:var(--sans);font-size:12px;color:var(--ink);padding:4px 5px;height:27px;box-sizing:border-box}
+table.sheet input:focus{outline:2px solid var(--brand);outline-offset:-2px;background:var(--surface)}
+table.sheet td.num input{text-align:right;width:58px}
+table.sheet td.txt input{text-align:left;width:86px}
+table.sheet td.wide input{text-align:left;width:130px}
+table.sheet td.dt input{width:120px;font-size:11px}
+table.sheet td.auto{background:var(--in-bg)}
+table.sheet td.auto input{color:var(--brand-2);font-weight:700;text-align:right;width:62px}
+table.sheet td.del{text-align:center;position:sticky;right:0;background:var(--surface);z-index:2;min-width:34px}
+table.sheet td.del button{background:transparent;border:none;color:var(--out);cursor:pointer;font-size:13px;padding:2px 6px}
+table.sheet input[type=number]{-moz-appearance:textfield}
+table.sheet input[type=number]::-webkit-outer-spin-button,table.sheet input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.sheetnote{margin:8px 2px;font-size:11.5px;color:var(--ink-2);line-height:1.6}
+
+@media(max-width:820px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .details{grid-template-columns:1fr}
+  .tab{padding:10px 14px}
+  .eform input[type=number]{width:72px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="appbar">
+    <span class="logo">DK</span>
+    <h1>세라믹 DISC 재고현황<span class="sub">김해공장 · 현황기준 기간조회</span></h1>
+    <span class="spacer"></span>
+    <span id="syncBadge" class="syncbadge"></span>
+    <button class="theme-btn" id="themeBtn">◐ 테마</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="stat">📊 통계</button>
+    <button class="tab" data-tab="input">✎ 입력</button>
+  </div>
+
+  <section id="tab-stat">
+  <div class="filters">
+    <div class="fgrp">
+      <label>사업장</label>
+      <select id="site" disabled><option>김해</option></select>
+    </div>
+    <div class="fgrp">
+      <label>제품</label>
+      <select id="model"></select>
+    </div>
+    <div class="fgrp">
+      <label>재고 산출방식</label>
+      <select id="mode">
+        <option value="real">실적 기준 (기초+입고−출고)</option>
+        <option value="hyun">현황 시트 방식 (기초재고 소진)</option>
+      </select>
+    </div>
+    <div class="fgrp">
+      <label>조회기간 (성형·출하일 기준)</label>
+      <div class="row">
+        <input type="date" id="start">
+        <span class="muted">~</span>
+        <input type="date" id="end">
+      </div>
+    </div>
+    <div class="fgrp">
+      <label>빠른선택</label>
+      <div class="quick" id="quick">
+        <button data-q="all">전체기간</button>
+        <button data-q="ytd">올해(YTD)</button>
+        <button data-q="q">최근90일</button>
+        <button data-q="m">최근30일</button>
+      </div>
+    </div>
+    <div class="fgrp">
+      <label>&nbsp;</label>
+      <button class="btn" id="run">🔍 조회</button>
+    </div>
+    <div class="fgrp">
+      <label>데이터</label>
+      <div class="row">
+        <button class="btn ghost" id="upBtn">⭱ 엑셀 재업로드</button>
+        <input type="file" id="file" accept=".xlsx,.xlsm" hidden>
+      </div>
+      <span class="filehint" id="fileHint">통합관리 엑셀 적용됨 (스냅샷)</span>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="sec"><h2>제품별 재고현황</h2><span class="tag" id="rangeTag"></span></div>
+  <div class="tablewrap">
+    <table class="grid">
+      <thead>
+        <tr class="g1">
+          <th class="l" rowspan="2">제품</th>
+          <th class="l" rowspan="2">품번</th>
+          <th rowspan="2">기초재고</th>
+          <th colspan="4" class="sep">생 산 (성형일 기준)</th>
+          <th rowspan="2" class="sep">공정재고</th>
+          <th rowspan="2" class="sep">출고</th>
+          <th rowspan="2" class="sep">기말재고</th>
+          <th rowspan="2" class="sep">요구수량</th>
+          <th rowspan="2" class="sep">달성률</th>
+        </tr>
+        <tr>
+          <th class="sep">성형</th><th>소성</th><th class="col-in">양품/포장</th><th>불량</th>
+        </tr>
+      </thead>
+      <tbody id="gridBody"></tbody>
+      <tfoot id="gridFoot"></tfoot>
+    </table>
+  </div>
+
+  <div class="sec"><h2>입·출고 상세</h2><span class="tag" id="detailTag">전체 제품</span></div>
+  <div class="details">
+    <div class="panel in">
+      <div class="phead"><span class="dot"></span>입고 — 양품/포장 (성형일 기준)<span class="cnt" id="inCnt"></span></div>
+      <div class="plist">
+        <table class="mini">
+          <thead><tr><th class="l">성형일</th><th class="l">제품</th><th>성형</th><th>소성</th><th>양품/포장</th><th>불량</th></tr></thead>
+          <tbody id="inBody"></tbody>
+          <tfoot id="inFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="panel out">
+      <div class="phead"><span class="dot"></span>출고 — 출하 실적 (출하일 기준)<span class="cnt" id="outCnt"></span></div>
+      <div class="plist">
+        <table class="mini">
+          <thead><tr><th class="l">출하일</th><th class="l">제품</th><th>수량</th><th class="l">구분</th></tr></thead>
+          <tbody id="outBody"></tbody>
+          <tfoot id="outFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes" id="notes"></div>
+  </section>
+
+  <section id="tab-input" hidden>
+    <div class="io-bar">
+      <button class="btn ghost" id="xlsBtn2">⭱ 엑셀 업로드</button>
+      <span style="flex:1"></span>
+      <button class="btn danger" id="resetBtn">↺ 원본 스냅샷으로 초기화</button>
+    </div>
+    <div class="io-sub"><span id="ioHint"></span> <b>Firebase 설정</b>을 넣으면 어느 PC에서 열어도 입력이 <b>실시간 공유</b>됩니다(우측 상단 뱃지로 상태 표시). 설정이 없으면 이 PC에만 저장됩니다. 입력은 자동 저장되며, <b>💾 저장</b>으로 즉시 반영할 수 있습니다.</div>
+
+    <div class="seg" id="entrySeg"></div>
+
+    <div class="entry" id="entry-model">
+      <div class="gridtools">
+        <div class="formtitle" id="mTitle"></div>
+        <span style="flex:1"></span>
+        <button class="btn" id="saveBtn">💾 저장</button>
+        <button class="btn" id="addRow">＋ 행추가</button>
+      </div>
+      <div class="sheetwrap">
+        <table class="sheet" id="sheet"></table>
+      </div>
+      <p class="sheetnote">엑셀 원본 데이터가 그대로 들어있습니다. 초록 칸(소성수량·검사합계·불량합계)은 <b>자동계산</b>. 셀을 클릭해 바로 입력하고 <b>＋행추가</b>로 맨 아래 빈 행이 추가됩니다. 입력 즉시 통계에 반영됩니다. <b>성형일은 Lot №에서 자동 인식</b>(예: 26K1915 → 11/19), 출하는 그 행의 <b>출하 일자·수량</b> 칸에 입력.</p>
+    </div>
+
+    <div class="entry" id="entry-base" hidden>
+      <p class="muted" style="margin:0 0 10px">제품별 <b>기초재고</b>(기준일 시점 재고)와 <b>요구수량</b>을 수정합니다. 값을 바꾸면 통계에 즉시 반영됩니다.</p>
+      <div class="tablewrap">
+        <table class="grid"><thead><tr><th class="l">제품</th><th class="l">품번</th><th>기초재고</th><th>요구수량</th></tr></thead>
+          <tbody id="baseBody"></tbody></table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+"use strict";
+/* ===== Firebase 공유 설정 =====================================
+   Firebase 콘솔 → 프로젝트 설정 → 내 앱(웹)에서 복사한 firebaseConfig를
+   아래 중괄호 안에 그대로 붙여넣으면, GitHub Pages 등 어디서 열어도
+   여러 PC가 실시간으로 같은 데이터를 공유합니다.
+   비워두면(현재) 이 PC에만 저장됩니다. ================================= */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyD8oHoHQTAG2nQsCNjItXmomZYU2FcG5j0",
+  authDomain: "productmanage-fcf37.firebaseapp.com",
+  projectId: "productmanage-fcf37",
+  storageBucket: "productmanage-fcf37.firebasestorage.app",
+  messagingSenderId: "58244205105",
+  appId: "1:58244205105:web:1e3ff911c2398360466310",
+  measurementId: "G-E6K6R33JSK"
+};
+/* ===== 임베디드 스냅샷 데이터 (세라믹DISC_통합관리_3.xlsx, 2026-11-24 기준) ===== */
+const EMBED = {"baseDate":46023,"writeDate":46350,"base":[{"code":"K6","pn":"1000408","init":133200,"req":211200},{"code":"71S","pn":"960671S","init":21777,"req":59400},{"code":"26S","pn":"96126","init":7975,"req":66560},{"code":"K15S","pn":"96115","init":16951,"req":57920},{"code":"K131S","pn":"","init":77600,"req":67200}],"lots":[{"m":"K6","lot":"26A0519","tag":"26A05191","d":46027,"press":"20-2 \u003c#4\u003e","f":4292,"fw":16,"bw":20,"pressure":8.6,"s":4256,"rcd":46034,"crack":0,"rcon":38,"rchip":20,"insd":46036,"warp":0,"icon":60,"ichip":40,"etc":0,"X":100,"p":4100,"b":194,"shd":null,"shq":0,"note":"800+2400+900","status":"포장완료"},{"m":"K6","lot":"26A0525","tag":"26A05251","d":46027,"press":"20-2 \u003c#4\u003e","f":4501,"fw":16,"bw":5,"pressure":8.6,"s":4480,"rcd":46034,"crack":0,"rcon":31,"rchip":10,"insd":46037,"warp":0,"icon":100,"ichip":59,"etc":0,"X":159,"p":4250,"b":221,"shd":null,"shq":0,"note":"1500+2400+350","status":"포장완료"},{"m":"K6","lot":"26A0619","tag":"26A06191","d":46028,"press":"20-2 \u003c#4\u003e","f":4424,"fw":16,"bw":40,"pressure":8.6,"s":4368,"rcd":46035,"crack":0,"rcon":39,"rchip":11,"insd":46037,"warp":0,"icon":80,"ichip":43,"etc":0,"X":123,"p":4150,"b":229,"shd":null,"shq":0,"note":"2050+2100","status":"포장완료"},{"m":"K6","lot":"26A0625","tag":"26A06251","d":46028,"press":"20-2 \u003c#4\u003e","f":4501,"fw":16,"bw":5,"pressure":8.6,"s":4480,"rcd":46035,"crack":0,"rcon":50,"rchip":18,"insd":46037,"warp":0,"icon":100,"ichip":50,"etc":0,"X":150,"p":3750,"b":239,"shd":null,"shq":0,"note":"850+2400+500","status":"포장완료"},{"m":"K6","lot":"26A0719","tag":"26A07191","d":46029,"press":"20-2 \u003c#4\u003e","f":4160,"fw":16,"bw":280,"pressure":8.6,"s":3864,"rcd":46035,"crack":0,"rcon":30,"rchip":19,"insd":46038,"warp":0,"icon":36,"ichip":40,"etc":0,"X":76,"p":3750,"b":421,"shd":null,"shq":0,"note":"1900+2400","status":"포장완료"},{"m":"K6","lot":"26A0725","tag":"26A07251","d":46029,"press":"20-2 \u003c#4\u003e","f":4506,"fw":16,"bw":10,"pressure":8.6,"s":4480,"rcd":46035,"crack":0,"rcon":33,"rchip":10,"insd":46038,"warp":0,"icon":70,"ichip":50,"etc":0,"X":120,"p":4300,"b":189,"shd":null,"shq":0,"note":"1900+2400","status":"포장완료"},{"m":"K6","lot":"26A0819","tag":"226A08191","d":46030,"press":"20-2 \u003c#4\u003e","f":4282,"fw":16,"bw":10,"pressure":8.6,"s":4256,"rcd":46035,"crack":0,"rcon":30,"rchip":12,"insd":46039,"warp":0,"icon":60,"ichip":44,"etc":0,"X":104,"p":4100,"b":172,"shd":null,"shq":0,"note":"2400+1700","status":"포장완료"},{"m":"K6","lot":"26A0825","tag":"26A08251","d":46030,"press":"20-2 \u003c#4\u003e","f":3944,"fw":14,"bw":10,"pressure":8.6,"s":3920,"rcd":46035,"crack":0,"rcon":16,"rchip":10,"insd":46039,"warp":0,"icon":70,"ichip":60,"etc":0,"X":130,"p":3750,"b":180,"shd":null,"shq":0,"note":"700+2400+650","status":"포장완료"},{"m":"K6","lot":"26A0919","tag":"26A09191","d":46031,"press":"20-2 \u003c#4\u003e","f":4170,"fw":16,"bw":10,"pressure":8.6,"s":4144,"rcd":46035,"crack":0,"rcon":20,"rchip":8,"insd":46039,"warp":0,"icon":54,"ichip":50,"etc":0,"X":104,"p":4000,"b":158,"shd":null,"shq":0,"note":"1750+2250","status":"포장완료"},{"m":"K6","lot":"26A0925","tag":"26A09251","d":46031,"press":"20-2 \u003c#4\u003e","f":4501,"fw":16,"bw":5,"pressure":8.6,"s":4480,"rcd":46035,"crack":0,"rcon":37,"rchip":12,"insd":46041,"warp":0,"icon":70,"ichip":51,"etc":0,"X":121,"p":3600,"b":191,"shd":null,"shq":0,"note":"150+2400+1050","status":"포장완료"},{"m":"K6","lot":"26A1219","tag":"26A12191","d":46034,"press":"20-2 \u003c#4\u003e","f":3432,"fw":12,"bw":60,"pressure":8.6,"s":3360,"rcd":46039,"crack":0,"rcon":4,"rchip":8,"insd":46041,"warp":0,"icon":40,"ichip":36,"etc":0,"X":76,"p":3250,"b":160,"shd":null,"shq":0,"note":"1350+1900","status":"포장완료"},{"m":"K6","lot":"26A1319","tag":"26A13191","d":46035,"press":"20-2 \u003c#4\u003e","f":4740,"fw":16,"bw":20,"pressure":8.6,"s":4704,"rcd":46039,"crack":0,"rcon":23,"rchip":10,"insd":46042,"warp":0,"icon":90,"ichip":43,"etc":0,"X":133,"p":4500,"b":202,"shd":null,"shq":0,"note":"500+2400+1600","status":"포장완료"},{"m":"K6","lot":"26A1419","tag":"26A14191","d":46036,"press":"20-2 \u003c#4\u003e","f":3112,"fw":12,"bw":20,"pressure":8.6,"s":3080,"rcd":46039,"crack":0,"rcon":7,"rchip":5,"insd":46042,"warp":0,"icon":74,"ichip":35,"etc":0,"X":109,"p":3200,"b":153,"shd":null,"shq":0,"note":"800+2400","status":"포장완료"},{"m":"K6","lot":"26A1519","tag":"26A15191","d":46037,"press":"20-2 \u003c#4\u003e","f":2550,"fw":10,"bw":30,"pressure":8.6,"s":2510,"rcd":46039,"crack":0,"rcon":5,"rchip":3,"insd":46042,"warp":0,"icon":40,"ichip":10,"etc":0,"X":50,"p":2500,"b":98,"shd":null,"shq":0,"note":"2400+100","status":"포장완료"},{"m":"K6","lot":"26A1619","tag":"26A16191","d":46038,"press":"20-2 \u003c#4\u003e","f":4404,"fw":16,"bw":20,"pressure":8.5,"s":4368,"rcd":46042,"crack":0,"rcon":10,"rchip":4,"insd":46043,"warp":0,"icon":71,"ichip":50,"etc":0,"X":121,"p":4200,"b":171,"shd":46044,"shq":55500,"note":"2300+1900","status":"포장완료"},{"m":"K6","lot":"26A1719","tag":"26A17191","d":46039,"press":"20-2 \u003c#4\u003e","f":4740,"fw":16,"bw":20,"pressure":8.5,"s":4704,"rcd":46042,"crack":0,"rcon":20,"rchip":6,"insd":46043,"warp":0,"icon":80,"ichip":57,"etc":0,"X":137,"p":4550,"b":199,"shd":null,"shq":0,"note":"500+2400+1650","status":"포장완료"},{"m":"K6","lot":"26A1919","tag":"26A19191","d":46041,"press":"20-2 \u003c#4\u003e","f":4582,"fw":16,"bw":30,"pressure":8.5,"s":4536,"rcd":46043,"crack":0,"rcon":16,"rchip":4,"insd":46044,"warp":0,"icon":26,"ichip":5,"etc":0,"X":31,"p":4400,"b":97,"shd":null,"shq":0,"note":"750+2400+1250","status":"포장완료"},{"m":"K6","lot":"26A1925","tag":"26A19251","d":46041,"press":"20-2 \u003c#4\u003e","f":4506,"fw":16,"bw":10,"pressure":8.6,"s":4480,"rcd":46044,"crack":0,"rcon":8,"rchip":3,"insd":46045,"warp":0,"icon":76,"ichip":35,"etc":0,"X":111,"p":4350,"b":148,"shd":null,"shq":0,"note":"1150+2400+800","status":"포장완료"},{"m":"K6","lot":"26A2019","tag":"26A20191","d":46042,"press":"20-2 \u003c#4\u003e","f":4582,"fw":16,"bw":30,"pressure":8.5,"s":4536,"rcd":46044,"crack":0,"rcon":10,"rchip":6,"insd":46048,"warp":0,"icon":54,"ichip":30,"etc":0,"X":84,"p":4400,"b":146,"shd":null,"shq":0,"note":"1600+2400+400","status":"포장완료"},{"m":"K6","lot":"26A2025","tag":"26A20251","d":46042,"press":"20-2 \u003c#4\u003e","f":4490,"fw":16,"bw":50,"pressure":8.5,"s":4424,"rcd":46045,"crack":0,"rcon":16,"rchip":6,"insd":46048,"warp":0,"icon":100,"ichip":49,"etc":0,"X":149,"p":4200,"b":237,"shd":null,"shq":0,"note":"2000+2200","status":"포장완료"},{"m":"K6","lot":"26A2119","tag":"26A21191","d":46043,"press":"20-2 \u003c#4\u003e","f":4404,"fw":16,"bw":30,"pressure":8.5,"s":4358,"rcd":46045,"crack":0,"rcon":5,"rchip":9,"insd":46048,"warp":0,"icon":50,"ichip":32,"etc":0,"X":82,"p":4200,"b":142,"shd":null,"shq":0,"note":"200+2400+1600","status":"포장완료"},{"m":"K6","lot":"26A2125","tag":"26A21251","d":46043,"press":"20-2 \u003c#4\u003e","f":4450,"fw":16,"bw":10,"pressure":8.6,"s":4424,"rcd":46048,"crack":0,"rcon":10,"rchip":8,"insd":46049,"warp":0,"icon":85,"ichip":58,"etc":0,"X":143,"p":4150,"b":187,"shd":null,"shq":0,"note":"800+2400+950","status":"포장완료"},{"m":"K6","lot":"26A2219","tag":"26A22191","d":46044,"press":"20-2 \u003c#4\u003e","f":5910,"fw":22,"bw":120,"pressure":8.5,"s":5768,"rcd":46048,"crack":0,"rcon":27,"rchip":10,"insd":46049,"warp":0,"icon":51,"ichip":30,"etc":0,"X":81,"p":5650,"b":260,"shd":null,"shq":0,"note":"1450+2400+1800","status":"포장완료"},{"m":"K6","lot":"26A2225","tag":"26A22251","d":46044,"press":"20-2 \u003c#4\u003e","f":4399,"fw":16,"bw":15,"pressure":8.6,"s":4368,"rcd":46048,"crack":0,"rcon":15,"rchip":11,"insd":46049,"warp":0,"icon":60,"ichip":32,"etc":0,"X":92,"p":4250,"b":149,"shd":null,"shq":0,"note":"600+2400+1250","status":"포장완료"},{"m":"K6","lot":"26A2319","tag":"26A23191","d":46045,"press":"20-2 \u003c#4\u003e","f":5161,"fw":20,"bw":45,"pressure":8.5,"s":5096,"rcd":46048,"crack":0,"rcon":4,"rchip":2,"insd":46051,"warp":0,"icon":47,"ichip":39,"etc":0,"X":86,"p":5000,"b":157,"shd":null,"shq":0,"note":"1150+2400+1450","status":"포장완료"},{"m":"K6","lot":"26A2325","tag":"26A23251","d":46045,"press":"20-2 \u003c#4\u003e","f":3168,"fw":12,"bw":20,"pressure":8.6,"s":3136,"rcd":46048,"crack":0,"rcon":6,"rchip":4,"insd":46051,"warp":0,"icon":30,"ichip":23,"etc":0,"X":53,"p":3100,"b":95,"shd":null,"shq":0,"note":"950+2150","status":"포장완료"},{"m":"K6","lot":"26A2719","tag":"26A27191","d":46049,"press":"20-2 \u003c#4\u003e","f":3515,"fw":16,"bw":40,"pressure":8.6,"s":3459,"rcd":46052,"crack":0,"rcon":8,"rchip":4,"insd":46055,"warp":0,"icon":23,"ichip":20,"etc":0,"X":43,"p":2350,"b":111,"shd":null,"shq":0,"note":"250+2100","status":"포장완료"},{"m":"K6","lot":"26A2819","tag":"26A28191","d":46050,"press":"20-2 \u003c#4\u003e","f":2928,"fw":12,"bw":4,"pressure":8.5,"s":2912,"rcd":46052,"crack":0,"rcon":11,"rchip":5,"insd":46055,"warp":0,"icon":33,"ichip":17,"etc":0,"X":50,"p":2850,"b":82,"shd":46059,"shq":55200,"note":"300+2400+150","status":"포장완료"},{"m":"K6","lot":"26B0619","tag":"26B06191","d":46059,"press":"20-2 \u003c#4\u003e","f":3101,"fw":31,"bw":46,"pressure":8.6,"s":3024,"rcd":46062,"crack":0,"rcon":16,"rchip":15,"insd":46062,"warp":0,"icon":30,"ichip":22,"etc":0,"X":52,"p":2900,"b":160,"shd":null,"shq":0,"note":"2250+650","status":"포장완료"},{"m":"K6","lot":"26B0919","tag":"26B09191","d":46062,"press":"20-2 \u003c#4\u003e","f":4620,"fw":18,"bw":10,"pressure":8.6,"s":4592,"rcd":46064,"crack":0,"rcon":20,"rchip":10,"insd":46076,"warp":0,"icon":26,"ichip":110,"etc":0,"X":136,"p":5900,"b":194,"shd":null,"shq":0,"note":"1750+2400+1750","status":"포장완료"},{"m":"K6","lot":"26B0925","tag":"26B09251","d":46062,"press":"20-2 \u003c#4\u003e","f":4575,"fw":16,"bw":23,"pressure":8.6,"s":4536,"rcd":46076,"crack":0,"rcon":30,"rchip":8,"insd":46077,"warp":0,"icon":20,"ichip":62,"etc":0,"X":82,"p":4300,"b":159,"shd":null,"shq":0,"note":"650+2400+1250","status":"포장완료"},{"m":"K6","lot":"26B1019","tag":"26B10191","d":46063,"press":"20-2 \u003c#4\u003e","f":4513,"fw":24,"bw":37,"pressure":8.9,"s":4452,"rcd":46076,"crack":0,"rcon":150,"rchip":5,"insd":46077,"warp":0,"icon":162,"ichip":40,"etc":0,"X":202,"p":5800,"b":418,"shd":null,"shq":0,"note":"1150+2400+2250","status":"포장완료"},{"m":"K6","lot":"26102525","tag":"26B10251","d":46063,"press":"20-2 \u003c#4\u003e","f":4564,"fw":16,"bw":12,"pressure":8.6,"s":4536,"rcd":46076,"crack":0,"rcon":130,"rchip":10,"insd":46078,"warp":0,"icon":74,"ichip":30,"etc":0,"X":104,"p":4300,"b":272,"shd":null,"shq":0,"note":"150+2400+1750","status":"포장완료"},{"m":"K6","lot":"26B1119","tag":"26B11191","d":46064,"press":"20-2 \u003c#4\u003e","f":0,"fw":0,"bw":0,"pressure":null,"s":0,"rcd":46079,"crack":0,"rcon":0,"rchip":1,"insd":46080,"warp":0,"icon":6,"ichip":10,"etc":0,"X":16,"p":250,"b":17,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"K6","lot":"26B1219","tag":"26B12191","d":46065,"press":"20-2 \u003c#4\u003e","f":3334,"fw":22,"bw":64,"pressure":8.9,"s":3248,"rcd":46079,"crack":0,"rcon":8,"rchip":4,"insd":46081,"warp":0,"icon":31,"ichip":35,"etc":0,"X":66,"p":3900,"b":164,"shd":null,"shq":0,"note":"650+2400+1100","status":"포장완료"},{"m":"K6","lot":"26B1225","tag":"26B12251","d":46065,"press":"20-2 \u003c#4\u003e","f":4501,"fw":16,"bw":5,"pressure":8.6,"s":4480,"rcd":46079,"crack":0,"rcon":25,"rchip":5,"insd":46086,"warp":0,"icon":40,"ichip":26,"etc":0,"X":66,"p":3600,"b":117,"shd":null,"shq":0,"note":"1300+2300","status":"포장완료"},{"m":"K6","lot":"26B1319","tag":"26B13191","d":46066,"press":"20-2 \u003c#4\u003e","f":3959,"fw":19,"bw":20,"pressure":8.8,"s":3920,"rcd":46055,"crack":0,"rcon":13,"rchip":8,"insd":46086,"warp":0,"icon":27,"ichip":20,"etc":0,"X":47,"p":3850,"b":107,"shd":null,"shq":0,"note":"100+2400+1350","status":"포장완료"},{"m":"K6","lot":"26B1325","tag":"26B13251","d":46066,"press":"20-2 \u003c#4\u003e","f":2250,"fw":8,"bw":2,"pressure":8.6,"s":2240,"rcd":46080,"crack":0,"rcon":2,"rchip":3,"insd":46086,"warp":0,"icon":25,"ichip":15,"etc":0,"X":40,"p":2150,"b":55,"shd":null,"shq":0,"note":"1050+1100","status":"포장완료"},{"m":"K6","lot":"26B2319","tag":"26B23191","d":46076,"press":"20-2 \u003c#4\u003e","f":5851,"fw":23,"bw":116,"pressure":8.9,"s":5712,"rcd":46080,"crack":0,"rcon":30,"rchip":7,"insd":46087,"warp":0,"icon":33,"ichip":25,"etc":0,"X":58,"p":5600,"b":234,"shd":null,"shq":0,"note":"1300+2400+1900","status":"포장완료"},{"m":"K6","lot":"26B2419","tag":"26B24191","d":46077,"press":"20-2 \u003c#4\u003e","f":5106,"fw":22,"bw":100,"pressure":8.6,"s":4984,"rcd":46081,"crack":0,"rcon":10,"rchip":9,"insd":46087,"warp":0,"icon":40,"ichip":26,"etc":0,"X":66,"p":4900,"b":207,"shd":null,"shq":0,"note":"500+2400+2000","status":"포장완료"},{"m":"K6","lot":"26B2519","tag":"26B25191","d":46078,"press":"20-2 \u003c#4\u003e","f":3674,"fw":14,"bw":20,"pressure":8.6,"s":3640,"rcd":46081,"crack":0,"rcon":11,"rchip":5,"insd":46087,"warp":0,"icon":30,"ichip":11,"etc":0,"X":41,"p":3600,"b":91,"shd":null,"shq":0,"note":"400+2400+800","status":"포장완료"},{"m":"K6","lot":"26C0319","tag":"26C03191","d":46084,"press":"20-2 \u003c#4\u003e","f":3150,"fw":30,"bw":40,"pressure":8.6,"s":3080,"rcd":46088,"crack":0,"rcon":8,"rchip":120,"insd":46090,"warp":0,"icon":2,"ichip":10,"etc":210,"X":222,"p":2650,"b":420,"shd":null,"shq":0,"note":"1600+2400+700","status":"포장완료"},{"m":"K6","lot":"26C0419","tag":"26C03191","d":46085,"press":"20-2 \u003c#4\u003e","f":1550,"fw":8,"bw":30,"pressure":8.9,"s":1512,"rcd":46088,"crack":0,"rcon":4,"rchip":4,"insd":46090,"warp":0,"icon":18,"ichip":30,"etc":0,"X":48,"p":2050,"b":94,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"K6","lot":"26C0519","tag":"26C05191","d":46086,"press":"20-2 \u003c#4\u003e","f":5204,"fw":22,"bw":30,"pressure":8.9,"s":5152,"rcd":46090,"crack":0,"rcon":10,"rchip":12,"insd":46090,"warp":0,"icon":33,"ichip":80,"etc":0,"X":113,"p":5050,"b":187,"shd":null,"shq":0,"note":"1700+2400+950","status":"포장완료"},{"m":"K6","lot":"26C0619","tag":"26C06191","d":46087,"press":"20-2 \u003c#4\u003e","f":5905,"fw":22,"bw":283,"pressure":8.9,"s":5600,"rcd":46090,"crack":0,"rcon":2,"rchip":9,"insd":46091,"warp":0,"icon":34,"ichip":70,"etc":0,"X":104,"p":5450,"b":420,"shd":null,"shq":0,"note":"1450+2400+1600","status":"포장완료"},{"m":"K6","lot":"26C0719","tag":"26C07191","d":46088,"press":"20-2 \u003c#4\u003e","f":1976,"fw":8,"bw":60,"pressure":8.9,"s":1908,"rcd":46090,"crack":0,"rcon":1,"rchip":2,"insd":46091,"warp":0,"icon":10,"ichip":43,"etc":0,"X":53,"p":1900,"b":124,"shd":null,"shq":0,"note":"800+1100","status":"포장완료"},{"m":"K6","lot":"26C1015","tag":"26C10151","d":46091,"press":"20-2 \u003c#4\u003e","f":4638,"fw":56,"bw":30,"pressure":8.4,"s":4552,"rcd":46093,"crack":0,"rcon":3,"rchip":4,"insd":46093,"warp":0,"icon":23,"ichip":60,"etc":0,"X":83,"p":4550,"b":176,"shd":null,"shq":0,"note":"1300+2400+850","status":"포장완료"},{"m":"K6","lot":"26C1115","tag":"26C11151","d":46092,"press":"20-2 \u003c#4\u003e","f":4613,"fw":16,"bw":5,"pressure":8.5,"s":4592,"rcd":46097,"crack":0,"rcon":10,"rchip":4,"insd":46097,"warp":0,"icon":10,"ichip":80,"etc":0,"X":90,"p":4500,"b":125,"shd":null,"shq":0,"note":"1550+2400+550","status":"포장완료"},{"m":"K6","lot":"26C1215","tag":"26C12151","d":46093,"press":"20-2 \u003c#4\u003e","f":4618,"fw":16,"bw":10,"pressure":8.6,"s":4592,"rcd":46097,"crack":0,"rcon":4,"rchip":3,"insd":46098,"warp":0,"icon":25,"ichip":35,"etc":0,"X":60,"p":4500,"b":93,"shd":null,"shq":0,"note":"1850+2400+250","status":"포장완료"},{"m":"K6","lot":"26C1313","tag":"26C13131","d":46094,"press":"20-2 \u003c#4\u003e","f":3101,"fw":12,"bw":121,"pressure":8.6,"s":2968,"rcd":46097,"crack":0,"rcon":10,"rchip":7,"insd":46098,"warp":0,"icon":28,"ichip":30,"etc":0,"X":58,"p":2900,"b":208,"shd":null,"shq":0,"note":"2150+750","status":"포장완료"},{"m":"K6","lot":"26C2519","tag":"26C25191","d":46106,"press":"20-2 \u003c#4\u003e","f":2727,"fw":19,"bw":20,"pressure":8.6,"s":2688,"rcd":46112,"crack":0,"rcon":0,"rchip":5,"insd":46115,"warp":0,"icon":14,"ichip":20,"etc":0,"X":34,"p":2600,"b":78,"shd":null,"shq":0,"note":"1650+950","status":"포장완료"},{"m":"K6","lot":"26C2525","tag":"26C25251","d":46106,"press":"20-2 \u003c#4\u003e","f":4506,"fw":16,"bw":10,"pressure":8.6,"s":4480,"rcd":46112,"crack":0,"rcon":4,"rchip":6,"insd":46119,"warp":0,"icon":18,"ichip":30,"etc":0,"X":48,"p":4350,"b":84,"shd":null,"shq":0,"note":"1450+2400+500","status":"포장완료"},{"m":"K6","lot":"26C2619","tag":"26C26191","d":46107,"press":"20-2 \u003c#4\u003e","f":5357,"fw":22,"bw":15,"pressure":8.5,"s":5320,"rcd":46112,"crack":0,"rcon":10,"rchip":3,"insd":46119,"warp":0,"icon":20,"ichip":40,"etc":0,"X":60,"p":5250,"b":110,"shd":null,"shq":0,"note":"1900+2400+950","status":"포장완료"},{"m":"K6","lot":"26C2719","tag":"26C27191","d":46108,"press":"20-2 \u003c#4\u003e","f":3837,"fw":14,"bw":15,"pressure":8.5,"s":3808,"rcd":46112,"crack":0,"rcon":7,"rchip":3,"insd":46120,"warp":0,"icon":23,"ichip":30,"etc":0,"X":53,"p":3700,"b":92,"shd":null,"shq":0,"note":"1450+2250","status":"포장완료"},{"m":"K6","lot":"26C2725","tag":"26C27251","d":46108,"press":"20-2 \u003c#4\u003e","f":4562,"fw":16,"bw":10,"pressure":8.6,"s":4536,"rcd":46112,"crack":0,"rcon":9,"rchip":4,"insd":46120,"warp":0,"icon":14,"ichip":30,"etc":0,"X":44,"p":4550,"b":83,"shd":null,"shq":0,"note":"150+2400+2000","status":"포장완료"},{"m":"K6","lot":"26C3019","tag":"26C30191","d":46111,"press":"20-2 \u003c#4\u003e","f":4562,"fw":16,"bw":10,"pressure":8.5,"s":4536,"rcd":46115,"crack":0,"rcon":6,"rchip":5,"insd":46120,"warp":0,"icon":57,"ichip":30,"etc":0,"X":87,"p":4450,"b":124,"shd":null,"shq":0,"note":"400+2400+1650","status":"포장완료"},{"m":"K6","lot":"26C3119","tag":"26C31191","d":46112,"press":"20-2 \u003c#4\u003e","f":4632,"fw":20,"bw":20,"pressure":8.6,"s":4592,"rcd":46115,"crack":0,"rcon":4,"rchip":3,"insd":46121,"warp":0,"icon":50,"ichip":38,"etc":0,"X":88,"p":4450,"b":135,"shd":null,"shq":0,"note":"750+2400+1300","status":"포장완료"},{"m":"K6","lot":"26D0115","tag":"26D01151","d":46113,"press":"20-2 \u003c#4\u003e","f":4338,"fw":16,"bw":10,"pressure":8.6,"s":4312,"rcd":46115,"crack":0,"rcon":3,"rchip":1,"insd":46121,"warp":0,"icon":50,"ichip":21,"etc":0,"X":71,"p":4250,"b":101,"shd":null,"shq":0,"note":"1100+2400+750","status":"포장완료"},{"m":"K6","lot":"26D0219","tag":"26D02191","d":46114,"press":"20-2 \u003c#4\u003e","f":4676,"fw":18,"bw":20,"pressure":8.6,"s":4638,"rcd":46118,"crack":40,"rcon":24,"rchip":20,"insd":46122,"warp":0,"icon":91,"ichip":20,"etc":0,"X":111,"p":4450,"b":233,"shd":null,"shq":0,"note":"1650+2400+400","status":"포장완료"},{"m":"K6","lot":"26D0225","tag":"26D02251","d":46114,"press":"20-2 \u003c#4\u003e","f":4621,"fw":16,"bw":13,"pressure":8.6,"s":4592,"rcd":46118,"crack":0,"rcon":10,"rchip":8,"insd":46124,"warp":0,"icon":44,"ichip":10,"etc":0,"X":54,"p":4450,"b":101,"shd":null,"shq":0,"note":"2000+2400+50","status":"포장완료"},{"m":"K6","lot":"26D0319","tag":"26D03191","d":46115,"press":"20-2 \u003c#4\u003e","f":4290,"fw":14,"bw":20,"pressure":8.5,"s":4256,"rcd":46118,"crack":0,"rcon":5,"rchip":6,"insd":46124,"warp":0,"icon":40,"ichip":19,"etc":0,"X":59,"p":3650,"b":104,"shd":null,"shq":0,"note":"2350+1300","status":"포장완료"},{"m":"K6","lot":"26D0619","tag":"26D06191","d":46118,"press":"20-2 \u003c#4\u003e","f":4572,"fw":16,"bw":20,"pressure":8.6,"s":4536,"rcd":46120,"crack":0,"rcon":5,"rchip":3,"insd":46125,"warp":0,"icon":18,"ichip":50,"etc":0,"X":68,"p":4450,"b":112,"shd":null,"shq":0,"note":"1100+2400+950","status":"포장완료"},{"m":"K6","lot":"26D0625","tag":"26D06251","d":46118,"press":"20-2 \u003c#4\u003e","f":4615,"fw":16,"bw":7,"pressure":8.6,"s":4592,"rcd":46120,"crack":0,"rcon":6,"rchip":5,"insd":46125,"warp":0,"icon":45,"ichip":30,"etc":0,"X":75,"p":4500,"b":109,"shd":null,"shq":0,"note":"1450+2400+650","status":"포장완료"},{"m":"K6","lot":"26D0719","tag":"26D07191","d":46119,"press":"20-2 \u003c#4\u003e","f":4561,"fw":16,"bw":30,"pressure":8.6,"s":4515,"rcd":46120,"crack":0,"rcon":5,"rchip":4,"insd":46125,"warp":0,"icon":40,"ichip":42,"etc":0,"X":82,"p":4250,"b":137,"shd":null,"shq":0,"note":"1750+2400+100","status":"포장완료"},{"m":"K6","lot":"26D0725","tag":"26D07251","d":46119,"press":"20-2 \u003c#4\u003e","f":4623,"fw":16,"bw":15,"pressure":8.6,"s":4592,"rcd":46122,"crack":0,"rcon":5,"rchip":3,"insd":46125,"warp":0,"icon":28,"ichip":34,"etc":0,"X":62,"p":4500,"b":101,"shd":null,"shq":0,"note":"2300+2200","status":"포장완료"},{"m":"K6","lot":"26D0819","tag":"26D08191","d":46120,"press":"20-2 \u003c#4\u003e","f":2426,"fw":8,"bw":10,"pressure":8.5,"s":2408,"rcd":46122,"crack":0,"rcon":8,"rchip":4,"insd":46125,"warp":0,"icon":30,"ichip":19,"etc":0,"X":49,"p":2150,"b":79,"shd":null,"shq":0,"note":"200+1950","status":"포장완료"},{"m":"K6","lot":"26D0825","tag":"26D08251","d":46120,"press":"20-2 \u003c#4\u003e","f":4578,"fw":16,"bw":26,"pressure":8.5,"s":4536,"rcd":null,"crack":0,"rcon":3,"rchip":7,"insd":46126,"warp":0,"icon":21,"ichip":50,"etc":0,"X":71,"p":4700,"b":123,"shd":null,"shq":0,"note":"450+2400+2150","status":"포장완료"},{"m":"K6","lot":"26D0919","tag":"26D09191","d":46121,"press":"20-2 \u003c#4\u003e","f":4674,"fw":16,"bw":10,"pressure":8.5,"s":4648,"rcd":46126,"crack":0,"rcon":10,"rchip":4,"insd":46127,"warp":0,"icon":30,"ichip":38,"etc":0,"X":68,"p":4500,"b":108,"shd":null,"shq":0,"note":"250+2400+1850","status":"포장완료"},{"m":"K6","lot":"26D0925","tag":"26D09251","d":46121,"press":"20-2 \u003c#4\u003e","f":3150,"fw":10,"bw":4,"pressure":8.5,"s":3136,"rcd":46126,"crack":0,"rcon":5,"rchip":5,"insd":46127,"warp":0,"icon":38,"ichip":40,"etc":0,"X":78,"p":3050,"b":102,"shd":null,"shq":0,"note":"550+2400+100","status":"포장완료"},{"m":"K6","lot":"26D1019","tag":"26D08251","d":46122,"press":"20-2 \u003c#4\u003e","f":336,"fw":0,"bw":0,"pressure":8.5,"s":336,"rcd":46126,"crack":0,"rcon":0,"rchip":3,"insd":46126,"warp":0,"icon":20,"ichip":0,"etc":0,"X":20,"p":300,"b":23,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"K6","lot":"26D1419","tag":"26D14191","d":46126,"press":"20-2 \u003c#4\u003e","f":3494,"fw":12,"bw":10,"pressure":8.6,"s":3472,"rcd":46217,"crack":0,"rcon":13,"rchip":15,"insd":46218,"warp":0,"icon":44,"ichip":40,"etc":0,"X":84,"p":3450,"b":134,"shd":null,"shq":0,"note":"2300+1600","status":"포장완료"},{"m":"K6","lot":"26D1519","tag":"26D14191","d":46127,"press":"20-2 \u003c#4\u003e","f":504,"fw":0,"bw":0,"pressure":8.6,"s":504,"rcd":46217,"crack":0,"rcon":2,"rchip":10,"insd":46218,"warp":0,"icon":16,"ichip":8,"etc":0,"X":24,"p":450,"b":36,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"K6","lot":"26E2919","tag":"26E29191","d":46171,"press":"20-2 \u003c#4\u003e","f":4626,"fw":14,"bw":30,"pressure":8.5,"s":4582,"rcd":46217,"crack":0,"rcon":16,"rchip":4,"insd":46218,"warp":0,"icon":13,"ichip":10,"etc":89,"X":112,"p":4450,"b":176,"shd":null,"shq":0,"note":"800+2400+1250","status":"포장완료"},{"m":"K6","lot":"26F0119","tag":"26F01191","d":46174,"press":"20-2 \u003c#4\u003e","f":4104,"fw":16,"bw":280,"pressure":8.6,"s":3808,"rcd":46217,"crack":0,"rcon":17,"rchip":6,"insd":46218,"warp":0,"icon":20,"ichip":24,"etc":40,"X":84,"p":3650,"b":403,"shd":null,"shq":0,"note":"1150+2400+100","status":"포장완료"},{"m":"K6","lot":"26F0219","tag":"26F02191","d":46175,"press":"20-2 \u003c#4\u003e","f":4414,"fw":16,"bw":30,"pressure":8.6,"s":4368,"rcd":46217,"crack":0,"rcon":14,"rchip":4,"insd":46218,"warp":0,"icon":10,"ichip":40,"etc":85,"X":135,"p":4100,"b":199,"shd":null,"shq":0,"note":"2300+1800","status":"포장완료"},{"m":"K6","lot":"26F0419","tag":"26F04191","d":46177,"press":"20-2 \u003c#4\u003e","f":1458,"fw":2,"bw":0,"pressure":8.5,"s":1456,"rcd":46217,"crack":0,"rcon":3,"rchip":1,"insd":46218,"warp":0,"icon":20,"ichip":9,"etc":0,"X":29,"p":1500,"b":35,"shd":null,"shq":0,"note":"600+1900","status":"포장완료"},{"m":"K6","lot":"26F0519","tag":"26F05191","d":46178,"press":"20-2 \u003c#4\u003e","f":3954,"fw":14,"bw":20,"pressure":8.6,"s":3920,"rcd":46217,"crack":0,"rcon":18,"rchip":5,"insd":46218,"warp":0,"icon":37,"ichip":40,"etc":20,"X":97,"p":3800,"b":154,"shd":null,"shq":0,"note":"500+2400+900","status":"포장완료"},{"m":"K6","lot":"26F0819","tag":"26F04191","d":46181,"press":"20-2 \u003c#4\u003e","f":1012,"fw":4,"bw":0,"pressure":8.6,"s":1008,"rcd":46217,"crack":0,"rcon":7,"rchip":4,"insd":46218,"warp":0,"icon":6,"ichip":18,"etc":0,"X":24,"p":1000,"b":39,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"K6","lot":"26I0415","tag":"","d":46269,"press":"20-2 \u003c#4\u003e","f":2158,"fw":0,"bw":0,"pressure":null,"s":2158,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":0,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K6","lot":"26I0813","tag":"","d":46273,"press":"20-2 \u003c#4\u003e","f":1708,"fw":0,"bw":0,"pressure":null,"s":1708,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":0,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K6","lot":"26J2913","tag":"26J29131","d":46324,"press":"20-2 \u003c#4\u003e","f":5568,"fw":28,"bw":108,"pressure":8.6,"s":5432,"rcd":46332,"crack":38,"rcon":5,"rchip":18,"insd":46335,"warp":0,"icon":26,"ichip":177,"etc":0,"X":203,"p":5150,"b":400,"shd":null,"shq":0,"note":"1500+2400+1250","status":"포장완료"},{"m":"K6","lot":"26J2925","tag":"26J29251","d":46324,"press":"20-2 \u003c#4\u003e","f":3716,"fw":16,"bw":60,"pressure":8.6,"s":3640,"rcd":46332,"crack":0,"rcon":10,"rchip":14,"insd":46335,"warp":0,"icon":20,"ichip":76,"etc":0,"X":96,"p":3500,"b":196,"shd":null,"shq":0,"note":"1150+2350","status":"포장완료"},{"m":"K6","lot":"26J3013","tag":"26J30131","d":46325,"press":"20-2 \u003c#4\u003e","f":3726,"fw":16,"bw":14,"pressure":8.6,"s":3696,"rcd":46332,"crack":0,"rcon":13,"rchip":12,"insd":46335,"warp":0,"icon":34,"ichip":80,"etc":0,"X":114,"p":3550,"b":169,"shd":null,"shq":0,"note":"50+2400+1100","status":"포장완료"},{"m":"K6","lot":"26J3025","tag":"26J30251","d":46325,"press":"20-2 \u003c#4\u003e","f":4053,"fw":16,"bw":5,"pressure":8.8,"s":4032,"rcd":46332,"crack":0,"rcon":8,"rchip":24,"insd":46335,"warp":0,"icon":55,"ichip":85,"etc":0,"X":140,"p":3850,"b":193,"shd":null,"shq":0,"note":"1300+2400+150","status":"포장완료"},{"m":"K6","lot":"26K0213","tag":"26K02131","d":46328,"press":"20-2 \u003c#4\u003e","f":3138,"fw":24,"bw":202,"pressure":8.6,"s":2912,"rcd":46343,"crack":0,"rcon":17,"rchip":10,"insd":46343,"warp":0,"icon":20,"ichip":51,"etc":0,"X":71,"p":2800,"b":324,"shd":null,"shq":0,"note":"2250+550","status":"포장완료"},{"m":"K6","lot":"26K0313","tag":"26K03131","d":46329,"press":"20-2 \u003c#4\u003e","f":3954,"fw":20,"bw":350,"pressure":8.6,"s":3584,"rcd":46343,"crack":0,"rcon":5,"rchip":6,"insd":46344,"warp":0,"icon":33,"ichip":80,"etc":0,"X":113,"p":3450,"b":494,"shd":null,"shq":0,"note":"1850+1600","status":"포장완료"},{"m":"K6","lot":"26K0413","tag":"26K04131","d":46330,"press":"20-2 \u003c#4\u003e","f":3502,"fw":20,"bw":66,"pressure":8.6,"s":3416,"rcd":46343,"crack":0,"rcon":24,"rchip":10,"insd":46344,"warp":0,"icon":44,"ichip":109,"etc":0,"X":153,"p":3200,"b":273,"shd":null,"shq":0,"note":"800+2400","status":"포장완료"},{"m":"K6","lot":"26K0515","tag":"26K05151","d":46331,"press":"20-2 \u003c#4\u003e","f":3567,"fw":16,"bw":23,"pressure":86,"s":3528,"rcd":46343,"crack":0,"rcon":8,"rchip":19,"insd":46344,"warp":0,"icon":24,"ichip":60,"etc":0,"X":84,"p":3400,"b":150,"shd":null,"shq":0,"note":"2400+1000","status":"포장완료"},{"m":"K6","lot":"26K0615","tag":"26K06151","d":46332,"press":"20-2 \u003c#4\u003e","f":3724,"fw":16,"bw":68,"pressure":8.5,"s":3640,"rcd":46343,"crack":0,"rcon":14,"rchip":9,"insd":46345,"warp":0,"icon":37,"ichip":30,"etc":32,"X":99,"p":3500,"b":206,"shd":null,"shq":0,"note":"1400+2100","status":"포장완료"},{"m":"K6","lot":"26K0715","tag":"26K07151","d":46333,"press":"20-2 \u003c#4\u003e","f":3212,"fw":14,"bw":6,"pressure":8.6,"s":3192,"rcd":46343,"crack":0,"rcon":9,"rchip":60,"insd":46345,"warp":0,"icon":79,"ichip":152,"etc":106,"X":337,"p":2750,"b":426,"shd":null,"shq":0,"note":"300+2400+50","status":"포장완료"},{"m":"71S","lot":"26J0719","tag":"26J06131","d":46302,"press":"20-1호기","f":2726,"fw":50,"bw":240,"pressure":8.7,"s":2436,"rcd":46307,"crack":0,"rcon":3,"rchip":34,"insd":46307,"warp":21,"icon":38,"ichip":119,"etc":0,"X":215,"p":2211,"b":542,"shd":null,"shq":0,"note":"2211","status":"포장완료"},{"m":"71S","lot":"26J0714","tag":"26J07141","d":46302,"press":"20-1호기","f":4604,"fw":13,"bw":55,"pressure":8.7,"s":4536,"rcd":46307,"crack":0,"rcon":5,"rchip":43,"insd":46308,"warp":13,"icon":9,"ichip":20,"etc":0,"X":90,"p":4323,"b":206,"shd":46310,"shq":8910,"note":"759+2970+594","status":"포장완료"},{"m":"71S","lot":"26J0725","tag":"26J08251","d":46302,"press":"20-1호기","f":1208,"fw":4,"bw":70,"pressure":8.7,"s":1134,"rcd":46307,"crack":0,"rcon":1,"rchip":3,"insd":46308,"warp":26,"icon":10,"ichip":26,"etc":0,"X":66,"p":1122,"b":144,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"71S","lot":"26J0814","tag":"26J08141","d":46303,"press":"20-1호기","f":3195,"fw":8,"bw":37,"pressure":8.5,"s":3150,"rcd":46307,"crack":0,"rcon":3,"rchip":20,"insd":46308,"warp":5,"icon":9,"ichip":15,"etc":0,"X":52,"p":4356,"b":120,"shd":46323,"shq":20790,"note":"2376+1980","status":"포장완료"},{"m":"71S","lot":"26J0825","tag":"26J08251","d":46303,"press":"20-1호기","f":3806,"fw":16,"bw":10,"pressure":8.7,"s":3780,"rcd":46307,"crack":0,"rcon":0,"rchip":5,"insd":46309,"warp":40,"icon":50,"ichip":44,"etc":0,"X":139,"p":3630,"b":170,"shd":null,"shq":0,"note":"990+2970+792","status":"포장완료"},{"m":"71S","lot":"26J1215","tag":"26J12151","d":46307,"press":"20-1호기","f":3904,"fw":16,"bw":24,"pressure":8.7,"s":3864,"rcd":46315,"crack":0,"rcon":4,"rchip":9,"insd":46315,"warp":70,"icon":27,"ichip":57,"etc":0,"X":167,"p":3696,"b":220,"shd":null,"shq":0,"note":"2178+1518","status":"포장완료"},{"m":"71S","lot":"26J1315","tag":"26J13151","d":46308,"press":"20-1호기","f":3890,"fw":16,"bw":10,"pressure":8.7,"s":3864,"rcd":46315,"crack":0,"rcon":3,"rchip":10,"insd":null,"warp":55,"icon":14,"ichip":25,"etc":0,"X":107,"p":3762,"b":146,"shd":null,"shq":0,"note":"1452+2310","status":"포장완료"},{"m":"71S","lot":"26J1415","tag":"26J14151","d":46309,"press":"20-1호기","f":3848,"fw":16,"bw":10,"pressure":8.7,"s":3822,"rcd":46315,"crack":0,"rcon":5,"rchip":12,"insd":46316,"warp":63,"icon":35,"ichip":37,"etc":0,"X":152,"p":3663,"b":195,"shd":null,"shq":0,"note":"660+2970+33","status":"포장완료"},{"m":"71S","lot":"26J1515","tag":"26J15151","d":46310,"press":"20-1호기","f":3808,"fw":16,"bw":12,"pressure":8.7,"s":3780,"rcd":46315,"crack":0,"rcon":3,"rchip":30,"insd":46316,"warp":68,"icon":45,"ichip":57,"etc":0,"X":203,"p":3564,"b":264,"shd":null,"shq":0,"note":"2937+627","status":"포장완료"},{"m":"71S","lot":"26J1615","tag":"26J16151","d":46311,"press":"20-1호기","f":3930,"fw":16,"bw":8,"pressure":8.7,"s":3906,"rcd":46321,"crack":0,"rcon":113,"rchip":17,"insd":46322,"warp":64,"icon":60,"ichip":76,"etc":0,"X":330,"p":3267,"b":484,"shd":null,"shq":0,"note":"2343+924","status":"포장완료"},{"m":"71S","lot":"26J1915","tag":"26J19151","d":46314,"press":"20-1호기","f":3851,"fw":16,"bw":13,"pressure":8.7,"s":3822,"rcd":46322,"crack":0,"rcon":14,"rchip":6,"insd":46345,"warp":41,"icon":58,"ichip":40,"etc":0,"X":159,"p":1155,"b":208,"shd":null,"shq":0,"note":"2046+1287","status":"포장완료"},{"m":"71S","lot":"26J2015","tag":"26J19151","d":46315,"press":"20-1호기","f":2792,"fw":12,"bw":8,"pressure":8.7,"s":2772,"rcd":46322,"crack":0,"rcon":5,"rchip":10,"insd":46349,"warp":30,"icon":40,"ichip":36,"etc":0,"X":121,"p":1782,"b":156,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"71S","lot":"26J2115","tag":"26J21151","d":46316,"press":"20-1호기","f":3858,"fw":16,"bw":20,"pressure":8.7,"s":3822,"rcd":46322,"crack":0,"rcon":8,"rchip":11,"insd":46346,"warp":36,"icon":20,"ichip":30,"etc":40,"X":145,"p":2112,"b":200,"shd":null,"shq":0,"note":"1683","status":"포장완료"},{"m":"71S","lot":"26J2215","tag":"26J21151","d":46317,"press":"20-1호기","f":1652,"fw":8,"bw":6,"pressure":8.7,"s":1638,"rcd":46322,"crack":0,"rcon":4,"rchip":5,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":9,"p":0,"b":32,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26J2815","tag":"","d":46323,"press":"20-1호기","f":846,"fw":4,"bw":2,"pressure":8.7,"s":840,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":6,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26J2814","tag":"","d":46323,"press":"20-1호기","f":1695,"fw":15,"bw":0,"pressure":8.5,"s":1680,"rcd":46332,"crack":0,"rcon":10,"rchip":4,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":14,"p":0,"b":43,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26J2914","tag":"","d":46324,"press":"20-1호기","f":3096,"fw":7,"bw":275,"pressure":8.5,"s":2814,"rcd":46332,"crack":0,"rcon":15,"rchip":5,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":20,"p":0,"b":322,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26J3014","tag":"","d":46325,"press":"20-1호기","f":3375,"fw":10,"bw":47,"pressure":8.6,"s":3318,"rcd":46332,"crack":0,"rcon":7,"rchip":8,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":15,"p":0,"b":87,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26K0214","tag":"","d":46328,"press":"20-1호기","f":1573,"fw":3,"bw":16,"pressure":8.5,"s":1554,"rcd":46343,"crack":0,"rcon":3,"rchip":10,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":13,"p":0,"b":45,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26K0314","tag":"","d":46329,"press":"20-1호기","f":3356,"fw":16,"bw":22,"pressure":8.5,"s":3318,"rcd":46343,"crack":0,"rcon":17,"rchip":10,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":27,"p":0,"b":92,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"71S","lot":"26K0415","tag":"","d":46330,"press":"20-1호기","f":308,"fw":4,"bw":10,"pressure":8.5,"s":294,"rcd":46343,"crack":0,"rcon":2,"rchip":5,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":7,"p":0,"b":28,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"26S","lot":"26I2113","tag":"26I22131","d":46286,"press":"20-3호기","f":1092,"fw":0,"bw":0,"pressure":null,"s":1092,"rcd":46294,"crack":0,"rcon":3,"rchip":5,"insd":46295,"warp":0,"icon":12,"ichip":15,"etc":0,"X":27,"p":1066,"b":35,"shd":null,"shq":0,"note":"2080+1534","status":"포장완료"},{"m":"26S","lot":"26I2213","tag":"26I22131","d":46287,"press":"20-3호기","f":2668,"fw":12,"bw":10,"pressure":8,"s":2646,"rcd":46294,"crack":0,"rcon":15,"rchip":10,"insd":null,"warp":0,"icon":18,"ichip":32,"etc":0,"X":50,"p":2548,"b":97,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"26S","lot":"26I2313","tag":"26I23131","d":46288,"press":"20-3호기","f":2794,"fw":14,"bw":8,"pressure":8,"s":2772,"rcd":46293,"crack":0,"rcon":8,"rchip":7,"insd":46295,"warp":0,"icon":18,"ichip":18,"etc":0,"X":36,"p":2704,"b":73,"shd":46296,"shq":6240,"note":"546+2080+78","status":"포장완료"},{"m":"26S","lot":"26I2913","tag":"","d":46294,"press":"20-3호기","f":2868,"fw":14,"bw":40,"pressure":8.1,"s":2814,"rcd":46301,"crack":0,"rcon":2,"rchip":14,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":70,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"26S","lot":"26I3015","tag":"26I30151","d":46295,"press":"20-3호기","f":3680,"fw":16,"bw":10,"pressure":8.4,"s":3654,"rcd":46301,"crack":0,"rcon":8,"rchip":14,"insd":46302,"warp":19,"icon":47,"ichip":45,"etc":225,"X":336,"p":3276,"b":384,"shd":46310,"shq":6240,"note":"2080+1196","status":"포장완료"},{"m":"26S","lot":"26J0113","tag":"26J01131","d":46296,"press":"20-3호기","f":3724,"fw":16,"bw":12,"pressure":8.1,"s":3696,"rcd":46301,"crack":0,"rcon":6,"rchip":33,"insd":46303,"warp":29,"icon":80,"ichip":40,"etc":180,"X":329,"p":3328,"b":396,"shd":null,"shq":0,"note":"884+2080+364","status":"포장완료"},{"m":"26S","lot":"26J0213","tag":"26J02131","d":46297,"press":"20-3호기","f":4522,"fw":26,"bw":44,"pressure":8.1,"s":4452,"rcd":46301,"crack":0,"rcon":6,"rchip":16,"insd":46303,"warp":15,"icon":20,"ichip":31,"etc":100,"X":166,"p":4264,"b":258,"shd":null,"shq":0,"note":"1716+2080+468","status":"포장완료"},{"m":"26S","lot":"26J0613","tag":"26J06131","d":46301,"press":"20-3호기","f":3997,"fw":33,"bw":142,"pressure":8.1,"s":3822,"rcd":46308,"crack":0,"rcon":4,"rchip":10,"insd":46310,"warp":15,"icon":23,"ichip":65,"etc":94,"X":197,"p":3588,"b":386,"shd":null,"shq":0,"note":"1612+1976","status":"포장완료"},{"m":"26S","lot":"26J0625","tag":"26J06251","d":46301,"press":"20-3호기","f":3574,"fw":16,"bw":30,"pressure":8,"s":3528,"rcd":46308,"crack":0,"rcon":6,"rchip":12,"insd":null,"warp":5,"icon":14,"ichip":20,"etc":29,"X":68,"p":3432,"b":132,"shd":null,"shq":0,"note":"104+2080+1248","status":"포장완료"},{"m":"26S","lot":"26J0713","tag":"26J07131","d":46302,"press":"20-3호기","f":2872,"fw":16,"bw":252,"pressure":8.1,"s":2604,"rcd":46308,"crack":0,"rcon":3,"rchip":8,"insd":46311,"warp":13,"icon":10,"ichip":31,"etc":32,"X":86,"p":2496,"b":365,"shd":46323,"shq":14560,"note":"832+2080","status":"포장완료"},{"m":"26S","lot":"26J0725","tag":"26J07131","d":46302,"press":"20-3호기","f":985,"fw":4,"bw":15,"pressure":8.1,"s":966,"rcd":46307,"crack":0,"rcon":0,"rchip":1,"insd":46311,"warp":4,"icon":16,"ichip":10,"etc":83,"X":113,"p":832,"b":133,"shd":null,"shq":0,"note":"416","status":"포장완료"},{"m":"26S","lot":"26J2213","tag":"","d":46317,"press":"20-3호기","f":464,"fw":14,"bw":30,"pressure":8.1,"s":420,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":44,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"26S","lot":"26J2315","tag":"","d":46318,"press":"20-3호기","f":930,"fw":4,"bw":2,"pressure":8.4,"s":924,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":6,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26C1219","tag":"26C12191","d":46093,"press":"20-3","f":1872,"fw":8,"bw":100,"pressure":8.8,"s":1764,"rcd":46097,"crack":0,"rcon":4,"rchip":21,"insd":46098,"warp":0,"icon":10,"ichip":40,"etc":25,"X":75,"p":1664,"b":208,"shd":null,"shq":0,"note":"2080+2080+1352","status":"포장완료"},{"m":"K15S","lot":"26C1319","tag":"26C12191","d":46094,"press":"20-3","f":4241,"fw":21,"bw":20,"pressure":8.9,"s":4200,"rcd":46097,"crack":0,"rcon":20,"rchip":60,"insd":46098,"warp":0,"icon":20,"ichip":55,"etc":130,"X":205,"p":3848,"b":326,"shd":null,"shq":0,"note":"","status":"포장완료"},{"m":"K15S","lot":"26C1615","tag":"26C16151","d":46097,"press":"20-3","f":4348,"fw":16,"bw":6,"pressure":8.8,"s":4326,"rcd":46099,"crack":0,"rcon":10,"rchip":6,"insd":46100,"warp":0,"icon":18,"ichip":60,"etc":10,"X":88,"p":4212,"b":126,"shd":null,"shq":0,"note":"728+2080+1404","status":"포장완료"},{"m":"K15S","lot":"26C1715","tag":"26C17151","d":46098,"press":"20-3","f":4429,"fw":16,"bw":3,"pressure":8.8,"s":4410,"rcd":46100,"crack":0,"rcon":5,"rchip":4,"insd":46105,"warp":0,"icon":25,"ichip":80,"etc":0,"X":105,"p":4290,"b":133,"shd":null,"shq":0,"note":"676+2080+1534","status":"포장완료"},{"m":"K15S","lot":"26C1815","tag":"26C18151","d":46099,"press":"20-3","f":4399,"fw":16,"bw":15,"pressure":8.8,"s":4368,"rcd":46105,"crack":0,"rcon":30,"rchip":22,"insd":46106,"warp":0,"icon":13,"ichip":110,"etc":0,"X":123,"p":4186,"b":206,"shd":null,"shq":0,"note":"546+2080+1560","status":"포장완료"},{"m":"K15S","lot":"26C1915","tag":"26C19151","d":46100,"press":"20-3","f":4388,"fw":16,"bw":4,"pressure":8.8,"s":4368,"rcd":46105,"crack":0,"rcon":22,"rchip":10,"insd":46106,"warp":0,"icon":20,"ichip":84,"etc":0,"X":104,"p":4212,"b":156,"shd":46126,"shq":20800,"note":"520+2080+1612","status":"포장완료"},{"m":"K15S","lot":"26K1114","tag":"26K11141","d":46337,"press":"20-3","f":1571,"fw":5,"bw":26,"pressure":8.6,"s":1540,"rcd":46342,"crack":0,"rcon":5,"rchip":10,"insd":46342,"warp":0,"icon":9,"ichip":50,"etc":16,"X":75,"p":0,"b":121,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1125","tag":"26K11251","d":46337,"press":"20-3","f":3219,"fw":16,"bw":8,"pressure":8.5,"s":3195,"rcd":46342,"crack":0,"rcon":8,"rchip":13,"insd":46342,"warp":0,"icon":28,"ichip":70,"etc":50,"X":148,"p":0,"b":193,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1214","tag":"26K12141","d":46338,"press":"20-3","f":2535,"fw":14,"bw":36,"pressure":8.6,"s":2485,"rcd":46342,"crack":0,"rcon":20,"rchip":30,"insd":46342,"warp":0,"icon":31,"ichip":89,"etc":101,"X":221,"p":0,"b":321,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1225","tag":"26K12251","d":46338,"press":"20-3","f":2479,"fw":14,"bw":15,"pressure":8.4,"s":2450,"rcd":46342,"crack":0,"rcon":15,"rchip":10,"insd":46342,"warp":0,"icon":27,"ichip":55,"etc":45,"X":127,"p":0,"b":181,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1325","tag":"26K13251","d":46339,"press":"20-3","f":2545,"fw":20,"bw":110,"pressure":8.6,"s":2415,"rcd":null,"crack":0,"rcon":3,"rchip":33,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":166,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1715","tag":"26K17151","d":46343,"press":"20-3","f":2899,"fw":16,"bw":13,"pressure":8.5,"s":2870,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":29,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1815","tag":"26K18151","d":46344,"press":"20-3","f":3906,"fw":16,"bw":5,"pressure":8.4,"s":3885,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":21,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K1915","tag":"26K19151","d":46345,"press":"20-3","f":3594,"fw":16,"bw":8,"pressure":8.4,"s":3570,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":24,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K2015","tag":"26K20151","d":46346,"press":"20-3","f":3135,"fw":14,"bw":6,"pressure":8.4,"s":3115,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":20,"shd":null,"shq":0,"note":"","status":"공정중"},{"m":"K15S","lot":"26K2315","tag":"","d":46349,"press":"20-3","f":0,"fw":0,"bw":0,"pressure":null,"s":0,"rcd":null,"crack":0,"rcon":0,"rchip":0,"insd":null,"warp":0,"icon":0,"ichip":0,"etc":0,"X":0,"p":0,"b":0,"shd":null,"shq":0,"note":"","status":"공정중"}]};
+
+/* ===== 날짜 유틸 (엑셀 시리얼 ↔ JS) ===== */
+const EPOCH = Date.UTC(1899,11,30);
+function serialToISO(s){const d=new Date(EPOCH+s*86400000);return d.toISOString().slice(0,10);}
+function isoToSerial(iso){const[y,m,d]=iso.split("-").map(Number);return Math.round((Date.UTC(y,m-1,d)-EPOCH)/86400000);}
+function fmt(n){return Math.round(n).toLocaleString("ko-KR");}
+
+/* ===== 상태 (RAW=편집원본, DATA=표시용) ===== */
+const LS_KEY="ceramic_inv_v3";
+function lotToDate(s){ const m=/^(\d{2})([A-La-l])(\d{2})/.exec(String(s||"").trim()); if(!m)return null;
+  const yy=2000+ +m[1], mon="ABCDEFGHIJKL".indexOf(m[2].toUpperCase())+1, dd=+m[3];
+  if(mon<1||dd<1||dd>31)return null; return isoToSerial(yy+"-"+String(mon).padStart(2,'0')+"-"+String(dd).padStart(2,'0')); }
+function clone(o){return JSON.parse(JSON.stringify(o));}
+function loadState(){try{const s=localStorage.getItem(LS_KEY);if(!s)return null;const o=JSON.parse(s);return(o&&o.base&&o.lots)?o:null;}catch(e){return null;}}
+function persist(){try{localStorage.setItem(LS_KEY,JSON.stringify(RAW));}catch(e){}}
+function migrate(raw){
+  raw.lots=raw.lots||[];
+  if(!raw._migrated){
+    const seen=new Set();
+    const add=(m,d,q)=>{const k=m+"|"+d+"|"+q;if(seen.has(k))return;seen.add(k);raw.lots.push({m,d:null,shd:d,shq:q,f:0,s:0,p:0,b:0,_ship:true,_agg:true});};
+    (raw.ship||[]).forEach(s=>add(s.m,s.d,s.q));
+    (raw.shipLog||[]).forEach(s=>add(s.m,s.d,s.q));
+    delete raw.ship; delete raw.shipLog; raw._migrated=true;
+  }
+  // 세부항목(성형중폐기 등)이 없는 과거행은 집계행(_agg)으로 표시 → 소성·불량 수기 수정
+  raw.lots.forEach(l=>{ if(l._agg===undefined && l.fw===undefined) l._agg=true; });
+  return raw;
+}
+function buildDATA(raw){
+  const ships=raw.lots.filter(l=>(+l.shq)>0 && l.shd!=null).map(l=>({m:l.m,d:+l.shd,q:+l.shq,src:l._ship?"출하기록":"일지"}));
+  return {baseDate:raw.baseDate, writeDate:raw.writeDate, base:raw.base, lots:raw.lots, ships};
+}
+let RAW = migrate(loadState() || clone(EMBED));
+let DATA = buildDATA(RAW);
+let selModel = "ALL";
+/* ===== 저장: 온라인(공유 DB) 우선, 없으면 localStorage ===== */
+const DBCOL="inv"; let dbh=null, dbMode="local", editing=false, pendingDocs=null, seeding=false; const wTimers={};
+function saveAllNow(){
+  if(dbh){ Object.keys(wTimers).forEach(k=>clearTimeout(wTimers[k]));
+    (async()=>{ try{
+      await dbh.doc(DBCOL+"/config").set({base:RAW.base,baseDate:RAW.baseDate,writeDate:RAW.writeDate});
+      for(const b of RAW.base){ await dbh.doc(DBCOL+"/"+b.code).set({lots:RAW.lots.filter(l=>l.m===b.code)}); }
+    }catch(e){} })();
+  } else { persist(); }
+}
+function syncData(){DATA=buildDATA(RAW);}
+function saveModel(m){ if(dbh)dbWriteModel(m); else persist(); }
+function saveConfig(){ if(dbh)dbWriteConfig(); else persist(); }
+function saveAll(){ if(dbh){ dbWriteConfig(); RAW.base.forEach(b=>dbWriteModel(b.code)); } else persist(); }
+function refreshStat(){syncData();render();}
+function refreshAll(){syncData();render();renderInput();}
+function dbWriteModel(m){ if(!dbh)return; if(wTimers[m])clearTimeout(wTimers[m]);
+  wTimers[m]=setTimeout(async()=>{ try{ await dbh.doc(DBCOL+"/"+m).set({lots:RAW.lots.filter(l=>l.m===m)}); }catch(e){} },600); }
+function dbWriteConfig(){ if(!dbh)return; if(wTimers._cfg)clearTimeout(wTimers._cfg);
+  wTimers._cfg=setTimeout(async()=>{ try{ await dbh.doc(DBCOL+"/config").set({base:RAW.base,baseDate:RAW.baseDate,writeDate:RAW.writeDate}); }catch(e){} },600); }
+async function seedDB(){ if(seeding||!dbh)return; seeding=true;
+  try{ await dbh.doc(DBCOL+"/config").set({base:EMBED.base,baseDate:EMBED.baseDate,writeDate:EMBED.writeDate});
+    const by={}; EMBED.lots.forEach(l=>{(by[l.m]=by[l.m]||[]).push(l);});
+    for(const m of Object.keys(by)){ await dbh.doc(DBCOL+"/"+m).set({lots:by[m]}); }
+  }catch(e){} seeding=false;
+}
+function applyDocs(docs){
+  const cfg=docs.config; if(!cfg)return;
+  if(cfg.base)RAW.base=cfg.base; RAW.baseDate=cfg.baseDate; RAW.writeDate=cfg.writeDate;
+  const lots=[]; RAW.base.forEach(b=>{ const d=docs[b.code]; if(d&&Array.isArray(d.lots))d.lots.forEach(l=>lots.push(l)); });
+  RAW.lots=lots; RAW._migrated=true;
+  syncData(); render(); if(!editing)renderInput();
+}
+function updateSyncBadge(){ const el=document.getElementById("syncBadge"); if(!el)return;
+  if(dbMode==="firebase"){ el.textContent="🟢 온라인 공유 (Firebase)"; el.className="syncbadge on"; }
+  else if(dbMode==="claude"){ el.textContent="🟢 온라인 공유 · 실시간"; el.className="syncbadge on"; }
+  else { el.textContent="💾 이 PC에만 저장"; el.className="syncbadge off"; }
+}
+async function initDB(){
+  // 1) claude.ai 아티팩트 환경이면 claude 공유 DB (외부 통신이 막혀 Firebase 불가)
+  try{ if(window.claude&&window.claude.use){ const h=await window.claude.use("db"); if(h){ dbh=h; dbMode="claude"; } } }catch(e){}
+  // 2) 그 외(GitHub Pages 등)에서는 Firebase
+  if(!dbh && window.firebase && FIREBASE_CONFIG && FIREBASE_CONFIG.projectId){
+    try{ if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG); dbh=firebase.firestore(); dbMode="firebase"; }catch(e){ dbh=null; }
+  }
+  updateSyncBadge();
+  if(!dbh)return;
+  try{
+    dbh.collection(DBCOL).onSnapshot(snap=>{
+      const docs={}; snap.docs.forEach(d=>{ if(d.exists!==false)docs[d.id]=d.data(); });
+      if(!docs.config){ seedDB(); return; }
+      if(editing){ pendingDocs=docs; return; }
+      applyDocs(docs);
+    }, err=>{ /* 접근 불가/오프라인: 임베드 데이터로 계속 */ });
+  }catch(e){}
+}
+
+function compute(code, start, end, mode){
+  const b = DATA.base.find(x=>x.code===code) || {init:0,req:0,pn:""};
+  let form=0,sint=0,pack=0,bad=0,packBefore=0;
+  for(const l of DATA.lots){ if(l.m!==code || l.d==null) continue;
+    if(l.d>=start && l.d<=end){form+=(+l.f||0);sint+=(+l.s||0);pack+=(+l.p||0);bad+=(+l.b||0);}
+    else if(l.d<start){packBefore+=(+l.p||0);}
+  }
+  let shipP=0,shipBefore=0;
+  for(const s of DATA.ships){ if(s.m!==code) continue;
+    if(s.d>=start && s.d<=end) shipP+=s.q;
+    else if(s.d<start) shipBefore+=s.q;
+  }
+  const open = b.init + packBefore - shipBefore;   // 기초재고(기간시작 시점)
+  const wip = form - pack - bad;                   // 공정재고(검사·포장 대기)
+  const rate = b.req>0 ? (pack/b.req*100) : 0;     // 달성률 = 양품포장/요구
+  // 현황 시트 방식: 출고실적이 있는 모델은 기초재고를 기간 중 소진으로 간주(= 출고에 가산)
+  const soak = (mode==="hyun" && shipP>0) ? open : 0;
+  const shipDisp = shipP + soak;
+  const end_ = open + pack - shipDisp;             // 기말재고
+  return {code, pn:b.pn, req:b.req, open, form, sint, pack, bad, wip, shipReal:shipP, soak, ship:shipDisp, end:end_, rate};
+}
+
+function render(){
+  const start = isoToSerial(document.getElementById("start").value);
+  const end   = isoToSerial(document.getElementById("end").value);
+  const mode  = document.getElementById("mode").value;
+  const codes = DATA.base.map(b=>b.code);
+  const rows = codes.map(c=>compute(c,start,end,mode));
+  const shown = selModel==="ALL" ? rows : rows.filter(r=>r.code===selModel);
+
+  // range tag
+  document.getElementById("rangeTag").textContent =
+    serialToISO(start).replace(/-/g,".")+" ~ "+serialToISO(end).replace(/-/g,".");
+
+  // KPI (합계 기준: 전체 또는 선택 제품)
+  const agg = shown.reduce((a,r)=>({pack:a.pack+r.pack,ship:a.ship+r.ship,end:a.end+r.end,bad:a.bad+r.bad,form:a.form+r.form}),{pack:0,ship:0,end:0,bad:0,form:0});
+  const badRate = agg.form>0 ? (agg.bad/agg.form*100) : 0;
+  document.getElementById("kpis").innerHTML = [
+    kpi("입고 (양품/포장)", agg.pack, "개", "in"),
+    kpi("출고 (출하실적)", agg.ship, "개", "out"),
+    kpi("기말재고", agg.end, "개", ""),
+    kpi("불량률", badRate.toFixed(1), "% ("+fmt(agg.bad)+"개)", "")
+  ].join("");
+
+  // grid body
+  const gb = document.getElementById("gridBody");
+  gb.innerHTML = rows.map(r=>{
+    const endCls = r.end<0 ? "neg" : "";
+    const rate = Math.max(0,Math.min(100,r.rate));
+    return `<tr data-code="${r.code}" class="${r.code===selModel?'sel':''}">
+      <td class="l prod">${r.code}</td>
+      <td class="l pn">${r.pn||'—'}</td>
+      <td class="tnum">${fmt(r.open)}</td>
+      <td class="tnum sep">${fmt(r.form)}</td>
+      <td class="tnum">${fmt(r.sint)}</td>
+      <td class="tnum col-in">${fmt(r.pack)}</td>
+      <td class="tnum">${r.bad?fmt(r.bad):'—'}</td>
+      <td class="tnum sep muted">${fmt(r.wip)}</td>
+      <td class="tnum sep col-out" title="${r.soak>0?('출하실적 '+fmt(r.shipReal)+' + 기초재고소진 '+fmt(r.soak)):''}">${r.ship?fmt(r.ship):'—'}</td>
+      <td class="tnum sep ${endCls}">${fmt(r.end)}</td>
+      <td class="tnum sep muted">${fmt(r.req)}</td>
+      <td class="sep"><span class="rate tnum">${r.rate.toFixed(0)}%</span><div class="bar"><i style="width:${rate}%"></i></div></td>
+    </tr>`;
+  }).join("");
+
+  // grid foot (전체 합계)
+  const T = rows.reduce((a,r)=>({open:a.open+r.open,form:a.form+r.form,sint:a.sint+r.sint,pack:a.pack+r.pack,bad:a.bad+r.bad,wip:a.wip+r.wip,ship:a.ship+r.ship,end:a.end+r.end,req:a.req+r.req}),{open:0,form:0,sint:0,pack:0,bad:0,wip:0,ship:0,end:0,req:0});
+  const tRate = T.req>0?(T.pack/T.req*100):0;
+  document.getElementById("gridFoot").innerHTML = `<tr>
+    <td class="l" colspan="2">전체 합계</td>
+    <td class="tnum">${fmt(T.open)}</td>
+    <td class="tnum sep">${fmt(T.form)}</td>
+    <td class="tnum">${fmt(T.sint)}</td>
+    <td class="tnum">${fmt(T.pack)}</td>
+    <td class="tnum">${fmt(T.bad)}</td>
+    <td class="tnum sep">${fmt(T.wip)}</td>
+    <td class="tnum sep">${fmt(T.ship)}</td>
+    <td class="tnum sep">${fmt(T.end)}</td>
+    <td class="tnum sep">${fmt(T.req)}</td>
+    <td class="sep tnum">${tRate.toFixed(0)}%</td>
+  </tr>`;
+
+  bindRows();
+  renderDetails(start,end,mode,rows);
+  updateNotes(mode);
+}
+
+function kpi(label,val,unit,cls){
+  const v = typeof val==="number"?fmt(val):val;
+  return `<div class="kpi ${cls}"><span class="k-label">${label}</span><span class="k-val tnum">${v}</span><span class="k-unit">${unit}</span></div>`;
+}
+
+function renderDetails(start,end,mode,rows){
+  const inRows = DATA.lots.filter(l=>l.d>=start&&l.d<=end&&(selModel==="ALL"||l.m===selModel)&&(l.f||l.p||l.b))
+    .sort((a,b)=>a.d-b.d||a.m.localeCompare(b.m));
+  let outRows = DATA.ships.filter(s=>s.d>=start&&s.d<=end&&(selModel==="ALL"||s.m===selModel))
+    .map(s=>({m:s.m,d:s.d,q:s.q,type:s.type,src:s.src}));
+  if(mode==="hyun" && rows){
+    rows.forEach(r=>{ if(r.soak>0 && (selModel==="ALL"||r.code===selModel))
+      outRows.push({m:r.code,d:start,q:r.soak,type:"기초재고 소진",src:"현황방식"}); });
+  }
+  outRows.sort((a,b)=>a.d-b.d||a.m.localeCompare(b.m));
+
+  document.getElementById("detailTag").textContent = selModel==="ALL"?"전체 제품":selModel;
+
+  const ib=document.getElementById("inBody");
+  if(inRows.length){
+    ib.innerHTML = inRows.map(l=>`<tr>
+      <td class="l date">${serialToISO(l.d).slice(5).replace("-","/")}</td>
+      <td class="l">${l.m}</td>
+      <td class="tnum">${fmt(l.f)}</td>
+      <td class="tnum">${fmt(l.s)}</td>
+      <td class="tnum col-in">${fmt(l.p)}</td>
+      <td class="tnum muted">${l.b?fmt(l.b):'—'}</td></tr>`).join("");
+    const t=inRows.reduce((a,l)=>({f:a.f+l.f,s:a.s+l.s,p:a.p+l.p,b:a.b+l.b}),{f:0,s:0,p:0,b:0});
+    document.getElementById("inFoot").innerHTML=`<tr><td class="l" colspan="2">합계 (${inRows.length}건)</td><td class="tnum">${fmt(t.f)}</td><td class="tnum">${fmt(t.s)}</td><td class="tnum">${fmt(t.p)}</td><td class="tnum">${fmt(t.b)}</td></tr>`;
+  } else { ib.innerHTML=`<tr><td colspan="6" class="empty">해당 기간 입고 내역 없음</td></tr>`; document.getElementById("inFoot").innerHTML=""; }
+  document.getElementById("inCnt").textContent = inRows.length?inRows.length+"건":"";
+
+  const ob=document.getElementById("outBody");
+  if(outRows.length){
+    ob.innerHTML = outRows.map(s=>`<tr>
+      <td class="l date">${serialToISO(s.d).slice(5).replace("-","/")}</td>
+      <td class="l">${s.m}</td>
+      <td class="tnum col-out">${fmt(s.q)}</td>
+      <td class="l muted">${s.type||'출하'} · ${s.src}</td></tr>`).join("");
+    const t=outRows.reduce((a,s)=>a+s.q,0);
+    document.getElementById("outFoot").innerHTML=`<tr><td class="l" colspan="2">합계 (${outRows.length}건)</td><td class="tnum">${fmt(t)}</td><td></td></tr>`;
+  } else { ob.innerHTML=`<tr><td colspan="4" class="empty">해당 기간 출고 내역 없음</td></tr>`; document.getElementById("outFoot").innerHTML=""; }
+  document.getElementById("outCnt").textContent = outRows.length?outRows.length+"건":"";
+}
+
+function bindRows(){
+  document.querySelectorAll("#gridBody tr").forEach(tr=>{
+    tr.onclick=()=>{ const c=tr.dataset.code; selModel = (selModel===c)?"ALL":c;
+      document.getElementById("model").value=selModel; render(); };
+  });
+}
+
+/* ===== 컨트롤 ===== */
+function setDates(startSer,endSer){
+  document.getElementById("start").value=serialToISO(startSer);
+  document.getElementById("end").value=serialToISO(endSer);
+}
+function initControls(){
+  const mSel=document.getElementById("model");
+  mSel.innerHTML=`<option value="ALL">전체</option>`+DATA.base.map(b=>`<option value="${b.code}">${b.code} (${b.pn||'-'})</option>`).join("");
+  mSel.value=selModel;
+  mSel.onchange=()=>{selModel=mSel.value;render();};
+
+  // 기본기간: 기준일 ~ 작성일 (= 2026 전체)
+  setDates(DATA.baseDate, DATA.writeDate);
+
+  document.getElementById("run").onclick=render;
+  document.getElementById("mode").onchange=render;
+  document.getElementById("quick").onclick=e=>{
+    const q=e.target.dataset.q; if(!q)return;
+    const today=DATA.writeDate;
+    if(q==="all") setDates(DATA.baseDate, today);
+    else if(q==="ytd") setDates(isoToSerial(serialToISO(today).slice(0,4)+"-01-01"), today);
+    else if(q==="q") setDates(today-90, today);
+    else if(q==="m") setDates(today-30, today);
+    render();
+  };
+  document.getElementById("upBtn").onclick=()=>document.getElementById("file").click();
+  document.getElementById("file").onchange=handleUpload;
+
+  // theme
+  const tb=document.getElementById("themeBtn");
+  tb.onclick=()=>{const r=document.documentElement;
+    const cur=r.getAttribute("data-theme");
+    const next = cur==="dark"?"light":(cur==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));
+    r.setAttribute("data-theme",next);
+  };
+}
+
+/* ===== 엑셀 재업로드 (통합관리 양식) ===== */
+function handleUpload(e){
+  const f=e.target.files[0]; if(!f) return;
+  const hint=document.getElementById("fileHint");
+  hint.textContent="읽는 중…";
+  const rd=new FileReader();
+  rd.onload=ev=>{
+    try{
+      const wb=XLSX.read(new Uint8Array(ev.target.result),{type:"array"});
+      const parsed=parseWorkbook(wb);
+      if(!parsed.base.length) throw new Error("모델을 찾지 못했습니다");
+      RAW=migrate(parsed); DATA=buildDATA(RAW); saveAll();
+      selModel="ALL"; initControls(); render(); renderInput();
+      hint.textContent=f.name+" 적용됨";
+    }catch(err){ hint.textContent="⚠ 실패: "+err.message; }
+  };
+  rd.readAsArrayBuffer(f);
+}
+function sheetArr(wb,name){const ws=wb.Sheets[name]; return ws?XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null}):null;}
+function num(v){const n=typeof v==="number"?v:parseFloat(String(v).replace(/,/g,"")); return isFinite(n)?n:0;}
+function parseWorkbook(wb){
+  const META=["현황","현황(일지기준)","출고기록","월별실적","기초정보"];
+  // 1) 현황 시트에서 모델/품번X/기초재고/요구수량
+  const base=[]; const baseMap={};
+  const hyun=sheetArr(wb,"현황");
+  if(hyun){ for(const r of hyun){ if(!r)continue;
+    const code=(r[0]!=null?String(r[0]).trim():""); const gubun=(r[1]!=null?String(r[1]).trim():"");
+    if(code && gubun==="기초재고"){ const o={code,pn:"",init:num(r[2]),req:num(r[10])}; base.push(o); baseMap[code]=o; }
+  }}
+  // 2) 기초정보에서 품번 보강 (모델 / 품번 / 일지시트 …)
+  const gi=sheetArr(wb,"기초정보");
+  if(gi){ for(const r of gi){ if(!r)continue; const code=(r[0]!=null?String(r[0]).trim():"");
+    if(baseMap[code] && r[1]!=null) baseMap[code].pn=String(r[1]).trim();
+  }}
+  // 모델이 현황에서 안 잡히면 기초정보로 대체
+  if(!base.length && gi){ for(const r of gi){ if(!r)continue; const code=(r[0]!=null?String(r[0]).trim():"");
+    if(code && code!=="모델" && r[4]!=null){ const o={code,pn:r[1]!=null?String(r[1]).trim():"",init:num(r[3]),req:num(r[4])}; base.push(o); baseMap[code]=o; }
+  }}
+  // 3) 각 모델 일지 시트 파싱 (C=성형일2, E=성형4, J=소성9, Y=포장24, Z=불량25, AA=출하일26, AB=출하량27)
+  const lots=[], ship=[];
+  for(const o of base){
+    const arr=sheetArr(wb,o.code); if(!arr) continue;
+    for(let i=4;i<arr.length;i++){ const r=arr[i]; if(!r) continue;
+      const md=r[2];
+      if(typeof md==="number" && md>40000){ lots.push({m:o.code,d:Math.round(md),f:num(r[4]),s:num(r[9]),p:num(r[24]),b:num(r[25])}); }
+      const sd=r[26], sq=num(r[27]);
+      if(typeof sd==="number" && sd>40000 && sq>0){ ship.push({m:o.code,d:Math.round(sd),q:sq}); }
+    }
+  }
+  // 4) 출고기록
+  const shipLog=[]; const og=sheetArr(wb,"출고기록");
+  if(og){ for(let i=3;i<og.length;i++){ const r=og[i]; if(!r)continue;
+    const d=r[0], q=num(r[3]);
+    if(typeof d==="number"&&d>40000&&q>0) shipLog.push({d:Math.round(d),m:r[1]!=null?String(r[1]).trim():"",type:r[2]!=null?String(r[2]).trim():"",q});
+  }}
+  // 기준일/작성일
+  let baseDate=EMBED.baseDate, writeDate=EMBED.writeDate;
+  if(gi){ for(const r of gi){ if(!r)continue; const t=r[0]!=null?String(r[0]):"";
+    if(t.indexOf("집계 기준일")>=0 && typeof r[1]==="number") baseDate=Math.round(r[1]);
+    if(t.indexOf("작성일")>=0 && typeof r[1]==="number") writeDate=Math.round(r[1]);
+  }}
+  return {baseDate,writeDate,base,lots,ship,shipLog};
+}
+
+/* ===== 주석 (산출방식에 따라 갱신) ===== */
+function updateNotes(mode){
+  const base = serialToISO(DATA.baseDate).replace(/-/g,".");
+  const shipLine = mode==="hyun"
+    ? `· <b>출고</b> = 출하실적(출하일 기준) <b>+ 기초재고 소진분</b> &nbsp;(현황 시트의 출고총계 = 기초재고출고 + 생산품출고)`
+    : `· <b>출고</b> = <code>출하일자</code>가 조회기간 내인 출하실적 (모델 일지 + 출고기록, 중복 제거)`;
+  const endLine = mode==="hyun"
+    ? `· <b>기말재고</b> = 양품/포장 − 출고실적 &nbsp;<span class="warn">(기초재고는 기간 중 소진 가정 — 현황 시트와 동일. 71S·26S·K15S는 현황 재고와 일치, K6는 출하 입력 누락분만큼 차이)</span>`
+    : `· <b>기말재고</b> = 기초재고 + 양품/포장 − 출고 &nbsp;<span class="warn">(출하 입력이 누락된 모델은 기말재고가 실재고보다 커질 수 있음 — 예: K6)</span>`;
+  document.getElementById("notes").innerHTML=`
+  <b>■ 산출 기준</b> &nbsp;<span class="tag" style="font-size:11px;padding:1px 8px;border:1px solid var(--line);border-radius:10px">${mode==="hyun"?"현황 시트 방식 (기초재고 소진)":"실적 기준"}</span><br>
+  · <b>기초재고</b> = 기준일(${base}) 재고 + 기간시작 전 양품/포장 − 기간시작 전 출고<br>
+  · <b>성형 / 소성 / 양품·포장 / 불량</b> = <code>성형일</code>이 조회기간 내인 Lot 합계 &nbsp;(현황 시트 자동집계와 동일 기준)<br>
+  · <b>공정재고</b> = 성형 − 양품/포장 − 불량 &nbsp;(검사·포장 대기 물량)<br>
+  ${shipLine}<br>
+  ${endLine}<br>
+  · <b>달성률</b> = 양품/포장 ÷ 요구수량<br><br>
+  <b>■ 사용법</b> &nbsp; 기간·산출방식을 바꾼 뒤 <b>조회</b>를 누르면 재계산됩니다. 행을 클릭하면 그 제품만 보고, 하단에 입·출고 상세가 뜹니다.
+  데이터가 갱신되면 <b>엑셀 재업로드</b>로 최신 <code>세라믹DISC_통합관리</code> 파일을 올리면 됩니다.`;
+}
+
+/* ===== 탭 전환 ===== */
+function setupTabs(){
+  document.querySelectorAll(".tab").forEach(b=>{
+    b.onclick=()=>{
+      document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));
+      const t=b.dataset.tab;
+      document.getElementById("tab-stat").hidden = (t!=="stat");
+      document.getElementById("tab-input").hidden = (t!=="input");
+      if(t==="stat") render(); else renderInput();
+    };
+  });
+}
+
+/* ===== 입력 탭 (엑셀형 스프레드시트) ===== */
+let curModel="K6", entryView="model", resetArm=false, statTimer=null;
+function jModels(){ return RAW.base.filter(b=>b.pn || RAW.lots.some(l=>l.m===b.code)).map(b=>b.code); }
+function bumpDate(d){ if(d>RAW.writeDate){ RAW.writeDate=d; saveConfig(); } const e=document.getElementById("end"); if(e.value && isoToSerial(e.value)<d) e.value=serialToISO(d); }
+function ioHint(t){ const el=document.getElementById("ioHint"); if(!el)return; el.textContent=t+"  "; setTimeout(()=>{if(el.textContent.trim()===t)el.textContent="";},4000); }
+function scheduleStat(){ if(statTimer)clearTimeout(statTimer); statTimer=setTimeout(()=>{refreshStat();saveModel(curModel);},350); }
+function updateDerived(l){ const n=k=>+l[k]||0;
+  l.s=(+l.f||0)-n('fw')-n('bw');
+  const rc=n('crack')+n('rcon')+n('rchip');
+  l.X=rc+n('warp')+n('icon')+n('ichip')+n('etc');
+  l.b=n('fw')+n('bw')+l.X+rc;
+}
+const DERIVED=["f","fw","bw","crack","rcon","rchip","warp","icon","ichip","etc"];
+// 엑셀 열 정의 (양식 순서)  t: txt/wide/dt/num/auto, g: 그룹헤더, sum: 합계대상
+const COLS=[
+ {k:'lot',t:'txt',lbl:'Lot №'},{k:'tag',t:'txt',lbl:'표기 Lot №'},
+ {k:'press',t:'txt',lbl:'Press/호기',g:'성형'},
+ {k:'f',t:'num',lbl:'수량',g:'성형',sum:1},{k:'fw',t:'num',lbl:'성형중폐기',g:'성형',sum:1},
+ {k:'bw',t:'num',lbl:'부적합폐기',g:'성형',sum:1},{k:'pressure',t:'num',lbl:'성형압',g:'성형'},
+ {k:'s',t:'auto',lbl:'수량(성형-폐기)',g:'소성',sum:1},
+ {k:'rcd',t:'dt',lbl:'일자',g:'Red Check'},{k:'crack',t:'num',lbl:'Crack',g:'Red Check',sum:1},
+ {k:'rcon',t:'num',lbl:'오염',g:'Red Check',sum:1},{k:'rchip',t:'num',lbl:'Chip',g:'Red Check',sum:1},
+ {k:'insd',t:'dt',lbl:'일자',g:'검사'},{k:'warp',t:'num',lbl:'휨',g:'검사',sum:1},
+ {k:'icon',t:'num',lbl:'오염',g:'검사',sum:1},{k:'ichip',t:'num',lbl:'Chip',g:'검사',sum:1},
+ {k:'etc',t:'num',lbl:'기타',g:'검사',sum:1},{k:'X',t:'auto',lbl:'합계',g:'검사',sum:1},
+ {k:'p',t:'num',lbl:'포장',g:'포장',sum:1},{k:'b',t:'auto',lbl:'불량합계',sum:1},
+ {k:'shd',t:'dt',lbl:'일자',g:'출하'},{k:'shq',t:'num',lbl:'수량',g:'출하',sum:1},
+ {k:'note',t:'wide',lbl:'비고'},{k:'status',t:'txt',lbl:'상태'}
+];
+function buildHead(){
+  let g1=`<th class="rownum" rowspan="2">#</th>`, g2="", i=0;
+  while(i<COLS.length){ const c=COLS[i];
+    if(!c.g){ g1+=`<th rowspan="2"${c.t==='auto'?' class="autoh"':''}>${c.lbl}</th>`; i++; }
+    else{ let j=i; while(j<COLS.length&&COLS[j].g===c.g)j++;
+      g1+=`<th colspan="${j-i}" class="gh${c.g==='소성'?' autoh':''}">${c.g}</th>`;
+      for(let k=i;k<j;k++){ g2+=`<th${COLS[k].t==='auto'?' class="autoh"':''}>${COLS[k].lbl}</th>`; }
+      i=j;
+    }
+  }
+  g1+=`<th class="del" rowspan="2">삭제</th>`;
+  return `<thead><tr class="g1">${g1}</tr><tr class="g2">${g2}</tr></thead>`;
+}
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function cellHTML(l,i,c){
+  const v=l[c.k];
+  if(c.t==='auto'){
+    if(l._agg && (c.k==='s'||c.k==='b')) // 집계행: 소성·불량 수기 수정 허용
+      return `<td class="num"><input type="number" data-i="${i}" data-k="${c.k}" value="${v?v:''}"></td>`;
+    const x=l[c.k]; return `<td class="auto"><input data-i="${i}" data-k="${c.k}" value="${x?fmt(x):''}" readonly tabindex="-1"></td>`;
+  }
+  if(c.t==='dt'){ return `<td class="dt"><input type="date" data-i="${i}" data-k="${c.k}" value="${v!=null?serialToISO(v):''}"></td>`; }
+  if(c.t==='num'){ return `<td class="num"><input type="number" data-i="${i}" data-k="${c.k}" value="${v?v:''}"></td>`; }
+  return `<td class="${c.t==='wide'?'wide':'txt'}"><input type="text" data-i="${i}" data-k="${c.k}" value="${v!=null?esc(v):''}"></td>`;
+}
+function newRow(){ return {m:curModel,d:null,f:0,fw:0,bw:0,s:0,pressure:null,rcd:null,crack:0,rcon:0,rchip:0,insd:null,warp:0,icon:0,ichip:0,etc:0,X:0,p:0,b:0,shd:null,shq:0,lot:'',tag:'',press:'',note:'',status:''}; }
+
+function setupInput(){
+  document.getElementById("entrySeg").onclick=e=>{ const b=e.target.closest("button"); if(!b)return;
+    if(b.dataset.m){entryView="model";curModel=b.dataset.m;} else if(b.dataset.e){entryView=b.dataset.e;}
+    renderInput();
+  };
+  document.getElementById("addRow").onclick=()=>{
+    RAW.lots.push(newRow()); syncData(); renderGrid(); saveModel(curModel);
+    const rows=document.querySelectorAll('#sheet tbody tr.drow'); const last=rows[rows.length-1];
+    if(last){ last.scrollIntoView({block:'nearest'}); const fi=last.querySelector('input'); if(fi)fi.focus(); }
+    ioHint("빈 행 추가됨 (맨 아래)");
+  };
+  const sheet=document.getElementById("sheet");
+  sheet.addEventListener("focusin",()=>{editing=true;});
+  sheet.addEventListener("focusout",()=>{ setTimeout(()=>{ if(!sheet.contains(document.activeElement)){ editing=false; if(pendingDocs){const d=pendingDocs;pendingDocs=null;applyDocs(d);} } },60); });
+  sheet.addEventListener("input", e=>{
+    const inp=e.target; if(!(inp.dataset&&inp.dataset.k)) return;
+    const i=+inp.dataset.i, k=inp.dataset.k, l=RAW.lots[i]; if(!l)return;
+    const col=COLS.find(c=>c.k===k); if(!col)return;
+    const aggEdit = col.t==='auto' && l._agg && (k==='s'||k==='b');
+    if(col.t==='auto' && !aggEdit) return;
+    if(col.t==='dt'){ l[k]=inp.value?isoToSerial(inp.value):null; if((k==='d'||k==='shd')&&l[k])bumpDate(l[k]); }
+    else if(col.t==='num' || aggEdit){ l[k]= inp.value===''?0:(+inp.value||0); }
+    else { l[k]=inp.value; }
+    if(k==='lot'){ const nd=lotToDate(l.lot); if(nd!=null){ l.d=nd; bumpDate(nd); } }  // Lot번호에서 성형일 자동
+    if(DERIVED.includes(k) && !l._agg){ updateDerived(l);
+      const tr=inp.closest("tr");
+      tr.querySelectorAll('input[data-k="s"],input[data-k="X"],input[data-k="b"]').forEach(a=>{a.value=l[a.dataset.k]?fmt(l[a.dataset.k]):'';});
+    }
+    updateSumRow(); scheduleStat();
+  });
+  sheet.addEventListener("click", e=>{ const btn=e.target.closest(".del button"); if(!btn)return;
+    RAW.lots.splice(+btn.dataset.i,1); refreshAll(); saveModel(curModel); ioHint("행 삭제됨");
+  });
+  document.getElementById("saveBtn").onclick=()=>{ saveAllNow(); ioHint("저장되었습니다"); };
+  document.getElementById("xlsBtn2").onclick=()=>document.getElementById("file").click();
+  const rb=document.getElementById("resetBtn");
+  rb.onclick=()=>{ if(!resetArm){resetArm=true;rb.textContent="↺ 한 번 더 누르면 초기화";setTimeout(()=>{resetArm=false;rb.textContent="↺ 원본 스냅샷으로 초기화";},3000);return;}
+    resetArm=false; rb.textContent="↺ 원본 스냅샷으로 초기화";
+    RAW=migrate(clone(EMBED)); selModel="ALL"; initControls(); refreshAll(); saveAll(); ioHint("원본 스냅샷으로 초기화됨"); };
+}
+
+function renderInput(){
+  const models=jModels();
+  if(entryView==="model" && !models.includes(curModel)) curModel=models[0]||"K6";
+  document.getElementById("entrySeg").innerHTML =
+    models.map(c=>`<button data-m="${c}"${(entryView==="model"&&c===curModel)?' class="active"':''}>${c}</button>`).join("")
+    + `<button data-e="base"${entryView==="base"?' class="active"':''}>기초정보</button>`;
+  document.getElementById("entry-model").hidden=(entryView!=="model");
+  document.getElementById("entry-base").hidden=(entryView!=="base");
+  if(entryView==="model") renderGrid(); else renderBase();
+}
+
+function renderGrid(){
+  document.getElementById("mTitle").textContent=curModel+" 일지 — 엑셀 양식 입력";
+  const rows=RAW.lots.map((l,i)=>({l,i})).filter(x=>x.l.m===curModel);
+  let html=buildHead()+"<tbody>";
+  // 합계 행
+  html+=`<tr class="sum"><td class="rownum">∑</td>`;
+  COLS.forEach(c=>{ html+= c.sum?`<td data-sum="${c.k}"></td>`:`<td class="lbl">${c.k==='lot'?'합계':''}</td>`; });
+  html+=`<td class="del"></td></tr>`;
+  if(rows.length){
+    rows.forEach((x,ri)=>{ html+=`<tr class="drow"><td class="rownum">${ri+1}</td>`;
+      COLS.forEach(c=>{ html+=cellHTML(x.l,x.i,c); });
+      html+=`<td class="del"><button data-i="${x.i}" title="행 삭제">✕</button></td></tr>`;
+    });
+  } else {
+    html+=`<tr><td class="rownum"></td><td colspan="${COLS.length+1}" style="text-align:center;padding:22px;color:var(--ink-2)">${curModel} 행이 없습니다 — <b>＋행추가</b>를 누르세요</td></tr>`;
+  }
+  html+="</tbody>";
+  document.getElementById("sheet").innerHTML=html;
+  updateSumRow();
+}
+function updateSumRow(){
+  const rows=RAW.lots.filter(l=>l.m===curModel);
+  COLS.forEach(c=>{ if(!c.sum)return; let t=0; rows.forEach(l=>{t+=(+l[c.k]||0);});
+    const cell=document.querySelector('#sheet td[data-sum="'+c.k+'"]'); if(cell)cell.textContent=t?fmt(t):'';
+  });
+}
+function renderBase(){
+  const bb=document.getElementById("baseBody");
+  bb.innerHTML = RAW.base.map((b,i)=>`<tr>
+    <td class="l prod">${b.code}</td><td class="l pn">${b.pn||'—'}</td>
+    <td><input type="number" class="edit" data-i="${i}" data-k="init" value="${b.init}"></td>
+    <td><input type="number" class="edit" data-i="${i}" data-k="req" value="${b.req}"></td></tr>`).join("");
+  document.querySelectorAll("#baseBody .edit").forEach(inp=>{
+    inp.onchange=()=>{ RAW.base[+inp.dataset.i][inp.dataset.k]=+inp.value||0; refreshStat(); saveConfig(); ioHint("기초정보 수정됨"); };
+  });
+}
+
+async function exportJSON(){
+  const name="세라믹DISC_재고데이터_"+serialToISO(RAW.writeDate)+".json";
+  const text=JSON.stringify(RAW,null,1);
+  // 아티팩트(claude.ai): downloads 기능 사용
+  try{
+    const dl = (window.claude&&window.claude.use) ? await window.claude.use("downloads") : null;
+    if(dl){ await dl.save({filename:name,data:text}); ioHint("JSON 저장 완료"); return; }
+  }catch(e){ if(e&&e.code==="declined"){ioHint("저장 취소됨");return;} }
+  // 배포된 HTML 파일: 일반 다운로드
+  try{
+    const blob=new Blob([text],{type:"application/json"}); const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    ioHint("JSON 내보내기 실행 (다운로드 폴더 확인)");
+  }catch(e){ ioHint("다운로드 불가 — 배포된 HTML 파일에서 사용하세요"); }
+}
+function importJSON(e){
+  const f=e.target.files[0]; if(!f)return;
+  const rd=new FileReader();
+  rd.onload=ev=>{ try{ const o=JSON.parse(ev.target.result);
+    if(!o.base||!o.lots) throw new Error("형식이 맞지 않습니다");
+    if(!o.baseDate)o.baseDate=EMBED.baseDate; if(!o.writeDate)o.writeDate=EMBED.writeDate;
+    RAW=migrate(o);
+    selModel="ALL"; initControls(); refreshAll(); saveAll(); ioHint(f.name+" 불러옴");
+  }catch(err){ ioHint("불러오기 실패: "+err.message); } };
+  rd.readAsText(f); e.target.value="";
+}
+
+setupTabs();
+setupInput();
+initControls();
+render();
+renderInput();
+updateSyncBadge();
+initDB();
+</script>
+
+</body>
+</html>
