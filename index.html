@@ -59,8 +59,9 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 .fgrp{display:flex;flex-direction:column;gap:4px;min-width:0}
 .fgrp label{font-size:11px;color:var(--ink-2);font-weight:600;letter-spacing:.2px}
 .fgrp .row{display:flex;gap:6px;align-items:center}
-select,input[type=date]{font-family:var(--sans);font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
-input[type=date]{min-width:140px}
+select,input[type=date],#start,#end{font-family:var(--sans);font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+input[type=date],#start,#end{min-width:120px}
+#start,#end{text-align:center;letter-spacing:.5px}
 .quick{display:flex;gap:4px;flex-wrap:wrap}
 .quick button{font-size:11.5px;padding:5px 9px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-2);border-radius:14px;cursor:pointer}
 .quick button:hover{border-color:var(--brand);color:var(--brand)}
@@ -233,11 +234,11 @@ table.sheet input[type=number]::-webkit-outer-spin-button,table.sheet input[type
       </select>
     </div>
     <div class="fgrp">
-      <label>조회기간 (성형·출하일 기준)</label>
+      <label>조회기간 (숫자 YYYYMMDD 입력 가능)</label>
       <div class="row">
-        <input type="date" id="start">
+        <input type="text" id="start" inputmode="numeric" autocomplete="off" placeholder="YYYYMMDD">
         <span class="muted">~</span>
-        <input type="date" id="end">
+        <input type="text" id="end" inputmode="numeric" autocomplete="off" placeholder="YYYYMMDD">
       </div>
     </div>
     <div class="fgrp">
@@ -373,6 +374,14 @@ const EPOCH = Date.UTC(1899,11,30);
 function serialToISO(s){const d=new Date(EPOCH+s*86400000);return d.toISOString().slice(0,10);}
 function isoToSerial(iso){const[y,m,d]=iso.split("-").map(Number);return Math.round((Date.UTC(y,m-1,d)-EPOCH)/86400000);}
 function fmt(n){return Math.round(n).toLocaleString("ko-KR");}
+function mkISO(y,mo,d){ y=+y;mo=+mo;d=+d; if(!(mo>=1&&mo<=12&&d>=1&&d<=31))return null; return y+"-"+String(mo).padStart(2,"0")+"-"+String(d).padStart(2,"0"); }
+function parseDateInput(s){ s=String(s==null?"":s).trim(); if(!s)return null;
+  const m=s.match(/^(\d{4})\D+(\d{1,2})\D+(\d{1,2})$/); if(m) return mkISO(m[1],m[2],m[3]);
+  const g=s.replace(/\D/g,"");
+  if(g.length===8) return mkISO(g.slice(0,4),g.slice(4,6),g.slice(6,8));
+  if(g.length===6) return mkISO("20"+g.slice(0,2),g.slice(2,4),g.slice(4,6));
+  return null;
+}
 
 /* ===== 상태 (RAW=편집원본, DATA=표시용) ===== */
 const LS_KEY="ceramic_inv_v3";
@@ -482,8 +491,12 @@ function compute(code, start, end, mode){
 }
 
 function render(){
-  const start = isoToSerial(document.getElementById("start").value);
-  const end   = isoToSerial(document.getElementById("end").value);
+  const siso = parseDateInput(document.getElementById("start").value) || serialToISO(RAW.baseDate);
+  const eiso = parseDateInput(document.getElementById("end").value) || serialToISO(RAW.writeDate);
+  document.getElementById("start").value = siso;
+  document.getElementById("end").value = eiso;
+  const start = isoToSerial(siso);
+  const end   = isoToSerial(eiso);
   const mode  = document.getElementById("mode").value;
   const codes = DATA.base.map(b=>b.code);
   const rows = codes.map(c=>compute(c,start,end,mode));
@@ -614,6 +627,10 @@ function initControls(){
 
   document.getElementById("run").onclick=render;
   document.getElementById("mode").onchange=render;
+  ["start","end"].forEach(id=>{ const el=document.getElementById(id);
+    el.onblur=()=>{ const v=parseDateInput(el.value); if(v)el.value=v; };
+    el.onkeydown=e=>{ if(e.key==="Enter"){ const v=parseDateInput(el.value); if(v)el.value=v; render(); } };
+  });
   document.getElementById("quick").onclick=e=>{
     const q=e.target.dataset.q; if(!q)return;
     const today=DATA.writeDate;
